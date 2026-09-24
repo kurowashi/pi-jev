@@ -10,7 +10,8 @@
       "checks": [
         "No `any` type is used",
         "No console.log statements are added",
-        { "check": "Public functions have explicit return types", "minProbability": 0.8 }
+        { "check": "Public functions have explicit return types", "minProbability": 0.8 },
+        { "check": "the code is hard to read or unnecessarily complex", "negate": true }
       ],
       "fail": "Jev check failed for {file}:\n{checks}\nFix the content so every check passes, then retry the edit."
     },

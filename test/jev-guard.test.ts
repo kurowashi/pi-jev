@@ -260,6 +260,145 @@ test("allows an edit when every check passes", async () => {
 	});
 });
 
+test("negate asks for the failure mode and inverts its probability", async () => {
+	const root = makeProject({
+		".jev-guard.json": JSON.stringify({
+			rules: [
+				{
+					name: "Quality",
+					files: "**/*.ts",
+					checks: [{ check: "dirty code", negate: true }],
+					fail: "blocked ({probability}): {checks}",
+				},
+			],
+		}),
+		"a.ts": "foo\n",
+	});
+	const { toolCall } = harness();
+	const ctx = fakeContext(root);
+
+	await withEnv(CLEAN_ENV, () =>
+		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
+			withFetch(
+				async (_url, init) => {
+					const body = JSON.parse(String(init.body));
+					assert.match(body.questions.check_0.instructions, /describes the new content: dirty code/);
+					return jevResponse([0.8]);
+				},
+				() =>
+					toolCall(
+						{
+							type: "tool_call",
+							toolName: "edit",
+							toolCallId: "1",
+							input: { path: "a.ts", edits: [{ oldText: "foo", newText: "bar" }] },
+						},
+						ctx,
+					),
+			),
+		),
+	).then((result) => {
+		const block = result as { block: boolean; reason: string };
+		assert.equal(block.block, true);
+		assert.match(block.reason, /^blocked \(20%\): /);
+		assert.match(block.reason, /dirty code \(negated, satisfied 20%\)/);
+	});
+});
+
+test("negate allows the edit when the failure mode is unlikely", async () => {
+	const root = makeProject({
+		".jev-guard.json": JSON.stringify({
+			rules: [{ files: "**/*.ts", checks: [{ check: "dirty code", negate: true }] }],
+		}),
+		"a.ts": "foo\n",
+	});
+	const { toolCall } = harness();
+	const ctx = fakeContext(root);
+
+	const result = await withEnv(CLEAN_ENV, () =>
+		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
+			withFetch(async () => jevResponse([0.05]), () =>
+				toolCall(
+					{
+						type: "tool_call",
+						toolName: "edit",
+						toolCallId: "1",
+						input: { path: "a.ts", edits: [{ oldText: "foo", newText: "bar" }] },
+					},
+					ctx,
+				),
+			),
+		),
+	);
+	assert.equal(result, undefined);
+});
+
+test("rule-level negate applies to its checks and per-check negate overrides it", async () => {
+	const root = makeProject({
+		".jev-guard.json": JSON.stringify({
+			rules: [
+				{
+					files: "**/*.ts",
+					negate: true,
+					checks: ["dirty code", { check: "No debug prints", negate: false }],
+				},
+			],
+		}),
+		"a.ts": "foo\n",
+	});
+	const { toolCall } = harness();
+	const ctx = fakeContext(root);
+
+	const result = await withEnv(CLEAN_ENV, () =>
+		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
+			withFetch(
+				async (_url, init) => {
+					const body = JSON.parse(String(init.body));
+					assert.match(body.questions.check_0.instructions, /describes the new content: dirty code/);
+					assert.match(body.questions.check_1.instructions, /satisfies this requirement: No debug prints/);
+					return jevResponse([0.9, 0.9]);
+				},
+				() =>
+					toolCall(
+						{
+							type: "tool_call",
+							toolName: "edit",
+							toolCallId: "1",
+							input: { path: "a.ts", edits: [{ oldText: "foo", newText: "bar" }] },
+						},
+						ctx,
+					),
+			),
+		),
+	);
+	const block = result as { block: boolean; reason: string };
+	assert.equal(block.block, true);
+	assert.match(block.reason, /dirty code \(negated, satisfied 10%\)/);
+	assert.doesNotMatch(block.reason, /No debug prints/);
+});
+
+test("/jev-guard check marks negated checks", async () => {
+	const root = makeProject({
+		".jev-guard.json": JSON.stringify({
+			rules: [{ files: "**/*.ts", checks: [{ check: "dirty code", negate: true }] }],
+		}),
+		"a.ts": "foo\n",
+	});
+	const { commands } = harness();
+	const ctx = fakeContext(root);
+	const handler = commands.get("jev-guard");
+	assert.ok(handler);
+
+	await withEnv(CLEAN_ENV, () =>
+		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
+			withFetch(async () => jevResponse([0.2]), () => handler("check a.ts", ctx)),
+		),
+	);
+
+	const report = ctx.notifications.at(-1)?.message ?? "";
+	assert.match(report, /PASS\s+80%\s+dirty code\s+\[negated\]/);
+});
+
 test("checks the whole written content for the write tool", async () => {
 	const root = makeProject({ ".jev-guard.json": JSON.stringify({ rules: [{ files: "**/*.md", checks: ["Japanese"] }] }) });
 	const { toolCall } = harness();

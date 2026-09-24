@@ -63,6 +63,12 @@ interface CheckSpec {
 	question?: string;
 	/** Minimum probability of "yes" for the check to pass. */
 	minProbability?: number;
+	/**
+	 * Set to true when `check` names the failure mode instead of the requirement.
+	 * Jev answers the statement as written and the probability is inverted, so
+	 * "dirty code" can be used instead of "No dirty code".
+	 */
+	negate?: boolean;
 }
 
 interface RuleConfig {
@@ -80,6 +86,8 @@ interface RuleConfig {
 	context?: string;
 	/** Default minProbability for this rule's checks. */
 	minProbability?: number;
+	/** Default negate for this rule's checks. */
+	negate?: boolean;
 }
 
 interface HookConfig {
@@ -128,6 +136,7 @@ interface PendingCheck {
 	name: string;
 	text: string;
 	minProbability: number;
+	negate: boolean;
 	rule: MatchedRule;
 }
 
@@ -181,13 +190,7 @@ export default function jevHooks(pi: ExtensionAPI): void {
 		if (!settings.enabled) return undefined;
 
 		const matched = matchRules(chain, absPath);
-		const checks: PendingCheck[] = [];
-		let index = 0;
-		for (const rule of matched) {
-			for (const check of normalizeChecks(rule.rule, settings.minProbability)) {
-				checks.push({ name: `check_${index++}`, text: check.text, minProbability: check.minProbability, rule });
-			}
-		}
+		const checks = collectChecks(matched, settings.minProbability);
 		if (checks.length === 0) return undefined;
 
 		const scope = settings.scope ?? (event.toolName === "write" ? "file" : "change");
@@ -227,7 +230,8 @@ export default function jevHooks(pi: ExtensionAPI): void {
 		}
 
 		const failures = checks.filter(
-			(check) => (outcome.probabilities.get(check.name) ?? 0) < check.minProbability,
+			(check) =>
+				satisfiedProbability(check, outcome.probabilities.get(check.name) ?? 0) < check.minProbability,
 		);
 		if (failures.length === 0) return undefined;
 
@@ -456,22 +460,37 @@ export function globToRegExp(pattern: string): RegExp {
 	return new RegExp(`^${out}$`);
 }
 
-function normalizeChecks(rule: RuleConfig, fallback: number): Array<{ text: string; minProbability: number }> {
-	const out: Array<{ text: string; minProbability: number }> = [];
+type NormalizedCheck = Pick<PendingCheck, "text" | "minProbability" | "negate">;
+
+function normalizeChecks(rule: RuleConfig, fallback: number): NormalizedCheck[] {
+	const out: NormalizedCheck[] = [];
 	if (!Array.isArray(rule.checks)) return out;
 	for (const spec of rule.checks) {
 		let text: string | undefined;
 		let minProbability = typeof rule.minProbability === "number" ? rule.minProbability : fallback;
+		let negate = rule.negate === true;
 		if (typeof spec === "string") {
 			text = spec;
 		} else if (spec && typeof spec === "object") {
 			const candidate = spec.check ?? spec.question;
 			if (typeof candidate === "string") text = candidate;
 			if (typeof spec.minProbability === "number") minProbability = spec.minProbability;
+			if (typeof spec.negate === "boolean") negate = spec.negate;
 		}
-		if (text && text.trim().length > 0) out.push({ text: text.trim(), minProbability });
+		if (text && text.trim().length > 0) out.push({ text: text.trim(), minProbability, negate });
 	}
 	return out;
+}
+
+function collectChecks(matched: MatchedRule[], fallback: number): PendingCheck[] {
+	const checks: PendingCheck[] = [];
+	let index = 0;
+	for (const rule of matched) {
+		for (const check of normalizeChecks(rule.rule, fallback)) {
+			checks.push({ name: `check_${index++}`, ...check, rule });
+		}
+	}
+	return checks;
 }
 
 function collectContext(settings: ResolvedSettings, matched: MatchedRule[]): string | undefined {
@@ -627,13 +646,15 @@ interface JevRequest {
 async function callJev(request: JevRequest): Promise<JevOutcome> {
 	const questions: Record<string, unknown> = {};
 	for (const check of request.checks) {
+		const ask = check.negate
+			? `Answer yes if the following statement describes the new content: ${check.text}`
+			: `Answer yes if the new content satisfies this requirement: ${check.text}`;
 		questions[check.name] = {
 			type: "noul",
-			instructions: `The state contains ${describeState(request.state)}. Answer yes if the new content satisfies this requirement: ${check.text}`,
-			criteria: {
-				true: "The requirement is satisfied.",
-				false: "The requirement is violated.",
-			},
+			instructions: `The state contains ${describeState(request.state)}. ${ask}`,
+			criteria: check.negate
+				? { true: "The statement describes the new content.", false: "The statement does not describe the new content." }
+				: { true: "The requirement is satisfied.", false: "The requirement is violated." },
 		};
 	}
 
@@ -832,6 +853,14 @@ function handleCheckError(
 	return undefined;
 }
 
+/**
+ * Probability that a check's requirement is satisfied. A negated check states
+ * the failure mode, so Jev's probability of the statement is inverted.
+ */
+function satisfiedProbability(check: PendingCheck, raw: number): number {
+	return check.negate ? 1 - raw : raw;
+}
+
 function buildFailureReason(
 	failures: PendingCheck[],
 	probabilities: Map<string, number>,
@@ -848,7 +877,10 @@ function buildFailureReason(
 	const blocks: string[] = [];
 	for (const [rule, list] of byRule) {
 		const details = list
-			.map((check) => `- ${check.text} (satisfied ${percent(probabilities.get(check.name) ?? 0)})`)
+			.map((check) => {
+				const probability = satisfiedProbability(check, probabilities.get(check.name) ?? 0);
+				return `- ${check.text} (${check.negate ? "negated, " : ""}satisfied ${percent(probability)})`;
+			})
 			.join("\n");
 		const template = rule.rule.fail ?? settings.fail;
 		if (template) {
@@ -859,7 +891,11 @@ function buildFailureReason(
 					checks: details,
 					details,
 					probability: percent(
-						Math.min(...list.map((check) => probabilities.get(check.name) ?? 0)),
+						Math.min(
+							...list.map((check) =>
+								satisfiedProbability(check, probabilities.get(check.name) ?? 0),
+							),
+						),
 					),
 				}),
 			);
@@ -1004,13 +1040,7 @@ async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> 
 	const settings = resolveSettings(chain);
 	const matched = matchRules(chain, absPath);
 
-	const checks: PendingCheck[] = [];
-	let index = 0;
-	for (const rule of matched) {
-		for (const check of normalizeChecks(rule.rule, settings.minProbability)) {
-			checks.push({ name: `check_${index++}`, text: check.text, minProbability: check.minProbability, rule });
-		}
-	}
+	const checks = collectChecks(matched, settings.minProbability);
 	if (checks.length === 0) {
 		ctx.ui.notify(`jev-guard: no rules match ${display}`, "warning");
 		return;
@@ -1051,9 +1081,10 @@ async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> 
 	}
 
 	const lines = checks.map((check) => {
-		const probability = outcome.probabilities.get(check.name) ?? 0;
+		const probability = satisfiedProbability(check, outcome.probabilities.get(check.name) ?? 0);
 		const verdict = probability >= check.minProbability ? "PASS" : "FAIL";
-		return `${verdict}  ${percent(probability).padStart(4)}  ${check.text}`;
+		const suffix = check.negate ? "  [negated]" : "";
+		return `${verdict}  ${percent(probability).padStart(4)}  ${check.text}${suffix}`;
 	});
 	ctx.ui.notify(
 		[
