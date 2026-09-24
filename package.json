@@ -1,0 +1,23 @@
+{
+	"name": "pi-jev-guard",
+	"version": "0.1.0",
+	"description": "Semantic file-edit checks with TypeSafe Jev (System One) for Pi",
+	"keywords": [
+		"pi-package",
+		"pi",
+		"jev",
+		"systemone",
+		"guard",
+		"edit"
+	],
+	"license": "MIT",
+	"type": "module",
+	"pi": {
+		"extensions": [
+			"./extensions/jev-guard.ts"
+		]
+	},
+	"scripts": {
+		"test": "node --test test/jev-guard.test.ts"
+	}
+}
