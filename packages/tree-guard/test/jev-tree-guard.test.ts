@@ -9,7 +9,7 @@ import jevTreeGuard, {
 	parseDotEnv,
 	renderTemplate,
 	renderTree,
-} from "../extensions/jev-tree-guard.ts";
+} from "../src/index.ts";
 
 // ------------------------------------------------------------------------------------------------
 // Helpers

@@ -14,10 +14,10 @@
 	"type": "module",
 	"pi": {
 		"extensions": [
-			"./extensions/jev-guard.ts"
+			"./src/index.ts"
 		]
 	},
 	"scripts": {
-		"test": "node --test test/jev-guard.test.ts"
+		"test": "node --test test/*.test.ts"
 	}
 }

@@ -1,0 +1,14 @@
+{
+	"name": "pi-jev",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Monorepo for the Jev (TypeSafe System One) guard plugins for Pi",
+	"license": "MIT",
+	"type": "module",
+	"workspaces": [
+		"packages/*"
+	],
+	"scripts": {
+		"test": "npm run test --workspaces --if-present"
+	}
+}

@@ -8,7 +8,7 @@ import jevHooks, {
 	parseDotEnv,
 	predictContent,
 	renderTemplate,
-} from "../extensions/jev-guard.ts";
+} from "../src/index.ts";
 
 // ------------------------------------------------------------------------------------------------
 // Helpers

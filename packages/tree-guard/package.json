@@ -16,10 +16,10 @@
 	"type": "module",
 	"pi": {
 		"extensions": [
-			"./extensions/jev-tree-guard.ts"
+			"./src/index.ts"
 		]
 	},
 	"scripts": {
-		"test": "node --test test/jev-tree-guard.test.ts"
+		"test": "node --test test/*.test.ts"
 	}
 }
