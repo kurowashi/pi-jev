@@ -1,0 +1,25 @@
+{
+	"name": "pi-jev-tree-guard",
+	"version": "0.1.0",
+	"description": "Semantic placement checks for newly created files with TypeSafe Jev (System One) for Pi",
+	"keywords": [
+		"pi-package",
+		"pi",
+		"jev",
+		"systemone",
+		"guard",
+		"tree",
+		"structure",
+		"write"
+	],
+	"license": "MIT",
+	"type": "module",
+	"pi": {
+		"extensions": [
+			"./extensions/jev-tree-guard.ts"
+		]
+	},
+	"scripts": {
+		"test": "node --test test/jev-tree-guard.test.ts"
+	}
+}
