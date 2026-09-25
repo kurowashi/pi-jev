@@ -1,0 +1,29 @@
+{
+  "enabled": true,
+  "minProbability": 0.5,
+  "onError": "allow",
+  "scope": "both",
+  "context": "Project conventions every check should consider. This text is sent to Jev with every request.",
+  "ignore": ["**/__init__.py", "**/generated/**", "*.min.js"],
+  "rules": [
+    {
+      "name": "TypeScript",
+      "files": ["**/*.ts", "**/*.tsx"],
+      "context": "This repository uses strict TypeScript.",
+      "checks": [
+        "No `any` type is used",
+        "No console.log statements are added",
+        { "check": "Public functions have explicit return types", "minProbability": 0.8 },
+        { "check": "the code is hard to read or unnecessarily complex", "negate": true }
+      ],
+      "fail": "Jev check failed for {file}:\n{checks}\nFix the content so every check passes, then retry the edit."
+    },
+    {
+      "name": "Markdown",
+      "files": "**/*.md",
+      "checks": ["Written in Japanese"],
+      "context": "Documentation in this repository is written in Japanese.",
+      "fail": "Documentation must be written in Japanese ({probability} satisfied)."
+    }
+  ]
+}
