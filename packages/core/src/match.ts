@@ -108,7 +108,7 @@ export function normalizeChecks(rule: RuleConfig, fallback: number): NormalizedC
 		if (typeof spec === "string") {
 			text = spec;
 		} else if (spec && typeof spec === "object") {
-			const candidate = spec.check ?? spec.question;
+			const candidate = spec.check;
 			if (typeof candidate === "string") text = candidate;
 			if (typeof spec.minProbability === "number") minProbability = spec.minProbability;
 			if (typeof spec.negate === "boolean") negate = spec.negate;

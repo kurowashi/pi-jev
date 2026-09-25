@@ -208,10 +208,6 @@ export default function jevHooks(pi: ExtensionAPI): void {
 		description: "Show, initialize, or dry-run .jev-guard.json semantic checks",
 		handler: commandHandler,
 	});
-	pi.registerCommand("jev", {
-		description: "Alias of /jev-guard",
-		handler: commandHandler,
-	});
 }
 
 // ------------------------------------------------------------------------------------------------

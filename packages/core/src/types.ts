@@ -3,9 +3,8 @@
 export type OnError = "allow" | "block";
 
 export interface CheckSpec {
-	/** The requirement to check. `question` is accepted as an alias. */
+	/** The requirement to check. */
 	check?: string;
-	question?: string;
 	/** Minimum probability of "yes" for the check to pass. */
 	minProbability?: number;
 	/**

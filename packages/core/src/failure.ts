@@ -45,7 +45,6 @@ export function buildFailureReason<C extends BaseConfig>(
 					file,
 					rule: ruleLabel(rule),
 					checks: details,
-					details,
 					probability: percent(
 						Math.min(
 							...list.map((check) =>

@@ -272,10 +272,6 @@ export default function jevTreeGuard(pi: ExtensionAPI): void {
 		description: "Show, initialize, or dry-run .jev-tree-guard.json placement checks",
 		handler: commandHandler,
 	});
-	pi.registerCommand("jev-tree", {
-		description: "Alias of /jev-tree-guard",
-		handler: commandHandler,
-	});
 }
 
 // ------------------------------------------------------------------------------------------------
