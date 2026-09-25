@@ -213,7 +213,7 @@ export function login() { ... }
 - `file:` 行はプロジェクト相対パスと、`new` / `overwrite` の別を示します（`"includeFileName": false` で無効化）。
 - `project tree` は作業ディレクトリをルートにした相対パス表示です。既存のディレクトリのみのパスには `/`、新規作成されるディレクトリには `auth/ (new dir)`、追加されるファイルには `login.ts (new)` のように**後置**で印が付きます（名前の頭が揃うので階層の深さが読みやすくなります）。
 - `file content` は作成しようとしているファイルの内容です（`"includeContent": false` で省略）。
-- エントリ数の上限や深さの上限に達しても、**対象ファイルのパスは必ず表示**されます。切り詰めの情報は Jev には送られません（`check` / `context` コマンドの表示に `tree: N entries (truncated)` として出ます）。
+- エントリ数の上限や深さの上限に達しても、**対象ファイルのパスは必ず表示**されます。切り詰めた場合は state の `note:` 行で Jev に伝えます（`check` / `context` コマンドの表示は `tree: N entries (truncated)` / `(depth limited)`）。
 - `maxTreeEntries` / `maxTreeDepth` / `treeIgnore` は設定ファイルで調整できます。
 - `onlyNewFiles: false` のときは `file:` 行が `(overwrite)` になり、既存ファイルはそのままツリーに現れます。
 
@@ -288,11 +288,16 @@ project tree
 |---|---|---|
 | TypeSafe（既定） | `SYSTEMONE_API_KEY`, `TYPESAFE_API_KEY` | `jev-1.13.0` |
 | OpenRouter | `OPENROUTER_API_KEY` | `typesafe/jev-1.13` |
-| OpenCode Zen | `OPENCODE_API_KEY` | `jev-1.13` |
+| OpenCode Zen | `OPENCODE_API_KEY`, `OPENCODE_ZEN_API_KEY` | `jev-1.13` |
 | Command Code | `COMMANDCODE_API_KEY` | `typesafe/jev` |
 
 - `SYSTEMONE_ENDPOINT` が設定されていればそれを最優先で使います。
-- TypeSafe のキーが無く `OPENROUTER_API_KEY` がある場合は、OpenRouter のエンドポイントを自動選択します。
+- 明示した `endpoint` / `SYSTEMONE_ENDPOINT` が無い場合は、利用可能なキーから自動選択します（TypeSafe → OpenRouter → OpenCode Zen → Command Code の順）。
+
+## Jev の容量制限
+
+- 1 リクエストの `state` + 最長の質問は、32k トークン程度に収める必要があります。
+- `maxFileChars` と `maxTreeEntries` は文字数・件数の上限で、トークン数は見ていません。巨大なツリーと大きなファイルでは超過し得ます。超過時は HTTP 400 となり、`onError` に従います（既定は作成を通す）。
 
 ## セキュリティ上の注意
 

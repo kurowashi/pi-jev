@@ -17,7 +17,7 @@
         "**/*.sh"
       ],
       "checks": [
-        "Does this file name clearly and briefly summarize its content?",
+        {"check": "Does this file name clearly and briefly summarize its content?", "minProbability": 0.3},
         {"check": "Does this file include content that is not relevant to its purpose?", "negate": true},
         "Is this file readable and maintainable?",
         {"check": "Does this file contain a band-aid solution?", "negate": true},

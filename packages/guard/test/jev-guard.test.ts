@@ -757,6 +757,58 @@ test("fails open on Jev errors by default and fails closed with onError block", 
 	assert.match((strictResult as { reason: string }).reason, /HTTP 500/);
 });
 
+test("sends the documented Jev request shape", async () => {
+	const root = makeProject({
+		".jev-guard.json": JSON.stringify({ rules: [{ files: "**/*.ts", checks: ["No bar"] }] }),
+		"a.ts": "foo\n",
+	});
+	const { toolCall } = harness();
+	let body:
+		| {
+				model: string;
+				state: string;
+				questions: Record<string, { type: string; instructions: string; criteria: Record<string, string> }>;
+		  }
+		| undefined;
+
+	await withEnv(CLEAN_ENV, () =>
+		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
+			withFetch(
+				async (url, init) => {
+					assert.equal(url, "https://api.typesafe.ai/v1/systemone");
+					assert.deepEqual(init.headers, {
+						"content-type": "application/json",
+						authorization: "Bearer test-key",
+					});
+					body = JSON.parse(String(init.body));
+					return jevResponse([0.99]);
+				},
+				() =>
+					toolCall(
+						{
+							type: "tool_call",
+							toolName: "edit",
+							toolCallId: "1",
+							input: { path: "a.ts", edits: [{ oldText: "foo", newText: "bar" }] },
+						},
+						fakeContext(root),
+					),
+			),
+		),
+	);
+
+	assert.ok(body);
+	assert.equal(body.model, "jev-1.13.0");
+	assert.equal(typeof body.state, "string");
+	assert.deepEqual(Object.keys(body.questions), ["check_0"]);
+	assert.equal(body.questions.check_0!.type, "noul");
+	assert.equal(typeof body.questions.check_0!.instructions, "string");
+	assert.deepEqual(body.questions.check_0!.criteria, {
+		true: "The requirement is satisfied.",
+		false: "The requirement is violated.",
+	});
+});
+
 test("selects the OpenRouter endpoint when only OPENROUTER_API_KEY is available", async () => {
 	const root = makeProject({
 		".jev-guard.json": JSON.stringify({ rules: [{ files: "**/*.ts", checks: ["No bar"] }] }),

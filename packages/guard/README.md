@@ -261,11 +261,11 @@ file: docs/README.md
 |---|---|---|
 | TypeSafe（既定） | `SYSTEMONE_API_KEY`, `TYPESAFE_API_KEY` | `jev-1.13.0` |
 | OpenRouter | `OPENROUTER_API_KEY` | `typesafe/jev-1.13` |
-| OpenCode Zen | `OPENCODE_API_KEY` | `jev-1.13` |
+| OpenCode Zen | `OPENCODE_API_KEY`, `OPENCODE_ZEN_API_KEY` | `jev-1.13` |
 | Command Code | `COMMANDCODE_API_KEY` | `typesafe/jev` |
 
 - `SYSTEMONE_ENDPOINT` が設定されていればそれを最優先で使います。
-- TypeSafe のキーが無く `OPENROUTER_API_KEY` がある場合は、OpenRouter のエンドポイントを自動選択します。
+- 明示した `endpoint` / `SYSTEMONE_ENDPOINT` が無い場合は、利用可能なキーから自動選択します（TypeSafe → OpenRouter → OpenCode Zen → Command Code の順）。
 - 接続先を固定したい場合は設定ファイルに `endpoint` / `model` / `apiKeyEnv` を書いてください。
 
 例（OpenRouter）:
@@ -277,6 +277,11 @@ file: docs/README.md
   "apiKeyEnv": "OPENROUTER_API_KEY"
 }
 ```
+
+## Jev の容量制限
+
+- 1 リクエストの `state` + 最長の質問は、32k トークン程度に収める必要があります。
+- `maxFileChars` は文字数でトークン数は見ていません。日本語では 40,000 文字が超過し得ます。超過時は HTTP 400 となり、`onError` に従います（既定は編集を通す）。
 
 ## セキュリティ上の注意
 

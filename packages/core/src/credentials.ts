@@ -8,7 +8,17 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { DEFAULT_ENDPOINT, DEFAULT_MODEL, KEY_NAMES, OPENROUTER_ENDPOINT, OPENROUTER_MODEL } from "./constants.ts";
+import {
+	COMMANDCODE_ENDPOINT,
+	COMMANDCODE_MODEL,
+	DEFAULT_ENDPOINT,
+	DEFAULT_MODEL,
+	KEY_NAMES,
+	OPENCODE_ENDPOINT,
+	OPENCODE_MODEL,
+	OPENROUTER_ENDPOINT,
+	OPENROUTER_MODEL,
+} from "./constants.ts";
 import type { BaseSettings, Credential } from "./types.ts";
 import { hostOf, nonEmpty } from "./util.ts";
 
@@ -23,13 +33,9 @@ export interface Connection {
 export function resolveConnection(settings: BaseSettings, dirs: string[]): Connection {
 	const keys = collectKeys(dirs);
 
-	let endpoint = settings.endpoint ?? nonEmpty(process.env.SYSTEMONE_ENDPOINT);
-	if (!endpoint) {
-		const hasTypesafe = keys.has("SYSTEMONE_API_KEY") || keys.has("TYPESAFE_API_KEY");
-		endpoint = !hasTypesafe && keys.has("OPENROUTER_API_KEY") ? OPENROUTER_ENDPOINT : DEFAULT_ENDPOINT;
-	}
+	const endpoint = settings.endpoint ?? nonEmpty(process.env.SYSTEMONE_ENDPOINT) ?? autoEndpoint(keys);
 	const host = hostOf(endpoint);
-	const model = settings.model ?? (host === "openrouter.ai" ? OPENROUTER_MODEL : DEFAULT_MODEL);
+	const model = settings.model ?? defaultModelFor(host);
 	const credential = pickCredential(settings, host, keys);
 	return {
 		endpoint,
@@ -37,6 +43,22 @@ export function resolveConnection(settings: BaseSettings, dirs: string[]): Conne
 		credential,
 		error: credential ? undefined : credentialError(settings, host),
 	};
+}
+
+/** TypeSafe first, then the first provider that has a key. */
+function autoEndpoint(keys: Map<string, Credential>): string {
+	if (keys.has("SYSTEMONE_API_KEY") || keys.has("TYPESAFE_API_KEY")) return DEFAULT_ENDPOINT;
+	if (keys.has("OPENROUTER_API_KEY")) return OPENROUTER_ENDPOINT;
+	if (keys.has("OPENCODE_API_KEY") || keys.has("OPENCODE_ZEN_API_KEY")) return OPENCODE_ENDPOINT;
+	if (keys.has("COMMANDCODE_API_KEY")) return COMMANDCODE_ENDPOINT;
+	return DEFAULT_ENDPOINT;
+}
+
+function defaultModelFor(host: string): string {
+	if (host === "openrouter.ai") return OPENROUTER_MODEL;
+	if (host === "opencode.ai") return OPENCODE_MODEL;
+	if (host === "api.commandcode.ai") return COMMANDCODE_MODEL;
+	return DEFAULT_MODEL;
 }
 
 export function collectKeys(dirs: string[]): Map<string, Credential> {
@@ -78,6 +100,8 @@ function credentialError(settings: BaseSettings, host: string): string {
 	if (settings.apiKeyEnv) return `the environment variable ${settings.apiKeyEnv} is not set`;
 	if (host === "api.typesafe.ai") return "no API key found; set SYSTEMONE_API_KEY or TYPESAFE_API_KEY";
 	if (host === "openrouter.ai") return "no API key found; set OPENROUTER_API_KEY or SYSTEMONE_API_KEY";
+	if (host === "opencode.ai") return "no API key found; set OPENCODE_API_KEY or SYSTEMONE_API_KEY";
+	if (host === "api.commandcode.ai") return "no API key found; set COMMANDCODE_API_KEY or SYSTEMONE_API_KEY";
 	return `no API key found for ${host || "the configured endpoint"}; set SYSTEMONE_API_KEY or add "apiKeyEnv"`;
 }
 

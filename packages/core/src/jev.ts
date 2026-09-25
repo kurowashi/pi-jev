@@ -91,6 +91,7 @@ export function describeFetchError(error: unknown, timeoutMs: number): string {
 }
 
 export function statusHint(status: number): string {
+	if (status === 400) return " (check the request size: state and the longest question must fit the model's token budget)";
 	if (status === 401 || status === 403) return " (check the API key)";
 	if (status === 402) return " (payment required)";
 	if (status === 404 || status === 405 || status === 410) return " (check the endpoint URL)";

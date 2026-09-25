@@ -142,9 +142,10 @@ interface ProposedPlacement {
 	tree: string;
 	content?: string;
 	note?: string;
-	/** Local-only diagnostics; not part of the state sent to Jev. */
+	/** Diagnostics for the command output; the note tells Jev when the tree was cut off. */
 	treeEntries: number;
 	treeTruncated: boolean;
+	treeDepthLimited: boolean;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -216,7 +217,7 @@ export default function jevTreeGuard(pi: ExtensionAPI): void {
 				apiKey: connection.credential.value,
 				state: buildStateDocument(proposed, contexts, settings.includeFileName),
 				describeState: describePlacementState(proposed, settings.includeFileName),
-				subject: "new file",
+				subject: proposed.kind === "new file" ? "new file" : "the file being overwritten",
 				checks,
 				timeoutMs: settings.timeoutMs,
 			});
@@ -341,6 +342,8 @@ export interface RenderedTree {
 	directories: number;
 	files: number;
 	truncated: boolean;
+	/** True when a directory was not descended into because `maxDepth` was reached. */
+	depthLimited: boolean;
 	/** Directory that would contain the target file, relative to the root ("." for the root). */
 	focusDir: string;
 	/** Directories that do not exist yet and would be created, relative to the root. */
@@ -369,6 +372,7 @@ export function renderTree(root: string, targetRel: string, options: TreeRenderO
 	let directories = 0;
 	let files = 0;
 	let truncated = false;
+	let depthLimited = false;
 
 	const onFocusPath = (rel: string): boolean =>
 		rel === "." || focusDir === rel || focusDir.startsWith(`${rel}/`);
@@ -438,7 +442,9 @@ export function renderTree(root: string, targetRel: string, options: TreeRenderO
 			entries++;
 			directories++;
 			lines.push(`${indent}${dir.name}/${dir.virtual ? " (new dir)" : ""}`);
-			if (dir.virtual || depth + 1 < maxDepth || focus) walk(rel, depth + 1);
+			const descend = dir.virtual || depth + 1 < maxDepth || focus;
+			if (!descend) depthLimited = true;
+			if (descend) walk(rel, depth + 1);
 		}
 		for (const item of items) {
 			if (entries >= maxEntries && !item.virtual) {
@@ -452,7 +458,7 @@ export function renderTree(root: string, targetRel: string, options: TreeRenderO
 	};
 
 	walk(".", 0);
-	return { text: lines.join("\n"), entries, directories, files, truncated, focusDir, createdDirs };
+	return { text: lines.join("\n"), entries, directories, files, truncated, depthLimited, focusDir, createdDirs };
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -487,6 +493,9 @@ function buildPlacementState(input: PlacementInput): ProposedPlacement {
 	if (rendered.createdDirs.length > 0) {
 		notes.push(`These directories do not exist yet and would be created: ${rendered.createdDirs.join(", ")}.`);
 	}
+	if (rendered.truncated || rendered.depthLimited) {
+		notes.push("The project tree was cut off by its entry or depth limit; some existing paths are not shown.");
+	}
 
 	return {
 		file: input.file,
@@ -496,7 +505,17 @@ function buildPlacementState(input: PlacementInput): ProposedPlacement {
 		note: notes.length > 0 ? notes.join(" ") : undefined,
 		treeEntries: rendered.entries,
 		treeTruncated: rendered.truncated,
+		treeDepthLimited: rendered.depthLimited,
 	};
+}
+
+/** One-line tree summary for the command output, including why it was cut off. */
+function treeSummary(proposed: ProposedPlacement): string {
+	const flags = [
+		proposed.treeTruncated ? "truncated" : "",
+		proposed.treeDepthLimited ? "depth limited" : "",
+	].filter((flag) => flag.length > 0);
+	return `tree: ${proposed.treeEntries} entries${flags.length > 0 ? ` (${flags.join(", ")})` : ""}`;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -691,7 +710,7 @@ async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> 
 			`jev-tree-guard check: ${display}${content === undefined ? " (not created yet)" : ""}`,
 			`endpoint: ${connection.endpoint}`,
 			`model: ${connection.model}`,
-			`tree: ${proposed.treeEntries} entries${proposed.treeTruncated ? " (truncated)" : ""}`,
+			treeSummary(proposed),
 			"",
 			...lines,
 			"",
@@ -774,7 +793,7 @@ function showContext(arg: string, ctx: ExtensionCommandContext): void {
 					settings,
 				});
 				lines.push(
-					`tree: ${proposed.treeEntries} entries${proposed.treeTruncated ? " (truncated)" : ""}`,
+					treeSummary(proposed),
 					"",
 					"state sent to Jev (as a new file):",
 					...displayBlock(buildStateDocument(proposed, contexts, settings.includeFileName)),

@@ -191,6 +191,7 @@ test("renderTree shows the existing structure with the new file marked", () => {
 	assert.equal(tree.focusDir, "src/lib");
 	assert.deepEqual(tree.createdDirs, []);
 	assert.equal(tree.truncated, false);
+	assert.equal(tree.depthLimited, false);
 	assert.equal(tree.files, 4);
 });
 
@@ -224,6 +225,14 @@ test("renderTree always renders the target path when truncated", () => {
 	assert.equal(tree.truncated, true);
 	assert.match(tree.text, /new\.ts \(new\)/);
 	assert.doesNotMatch(tree.text, /truncated/);
+});
+
+test("renderTree reports when the depth limit cut the tree", () => {
+	const root = makeProject({ "a/b/c/d/e/f.ts": "" });
+	const tree = renderTree(root, "z/new.ts", { maxDepth: 2 });
+	assert.equal(tree.depthLimited, true);
+	assert.equal(tree.truncated, false);
+	assert.match(tree.text, /new\.ts \(new\)/);
 });
 
 test("renderTree excludes an existing file when dry-running it as new", () => {
@@ -274,6 +283,10 @@ test("blocks the creation of a misplaced new file", async () => {
 					assert.equal(body.questions.check_0.type, "noul");
 					assert.match(body.questions.check_0.instructions, /existing project file tree/);
 					assert.match(body.questions.check_0.instructions, /Is the file in the right directory\?/);
+					assert.deepEqual(body.questions.check_0.criteria, {
+						true: "The requirement is satisfied.",
+						false: "The requirement is violated.",
+					});
 					return jevResponse([0.1]);
 				},
 				() => toolCall(writeEvent("src/features/new.ts", "export const x = 1;\n"), ctx),
@@ -347,6 +360,7 @@ test("checks overwrites when onlyNewFiles is false", async () => {
 					assert.match(body.state, /^file: src\/a\.ts \(overwrite\)$/m);
 					assert.doesNotMatch(body.state, /a\.ts \(new\)/);
 					assert.match(body.questions.check_0.instructions, /already present/);
+					assert.match(body.questions.check_0.instructions, /the file being overwritten/);
 					return jevResponse([0.99]);
 				},
 				() => toolCall(writeEvent("src/a.ts", "new\n"), ctx),
@@ -397,6 +411,34 @@ test("does not check files that no rule matches", async () => {
 	);
 	assert.equal(result, undefined);
 	assert.equal(called, false);
+});
+
+test("tells Jev when the tree was cut off", async () => {
+	const files: Record<string, string> = {};
+	for (let i = 0; i < 6; i++) files[`d${i}/file.ts`] = "";
+	const root = makeProject({
+		".jev-tree-guard.json": JSON.stringify({
+			maxTreeEntries: 3,
+			rules: [{ files: ["**/*.ts"], checks: ["Fits"] }],
+		}),
+		...files,
+	});
+	const { toolCall } = harness();
+	const ctx = fakeContext(root);
+
+	const result = await withEnv(CLEAN_ENV, () =>
+		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
+			withFetch(
+				async (_url, init) => {
+					const body = JSON.parse(String(init.body));
+					assert.match(body.state, /note: .*tree was cut off/);
+					return jevResponse([0.99]);
+				},
+				() => toolCall(writeEvent("new.ts", "x\n"), ctx),
+			),
+		),
+	);
+	assert.equal(result, undefined);
 });
 
 test("ignore prevents checks entirely", async () => {
