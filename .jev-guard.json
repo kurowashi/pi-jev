@@ -1,0 +1,57 @@
+{
+  "enabled": true,
+  "minProbability": 0.5,
+  "onError": "allow",
+  "context": "",
+  "ignore": [
+    "**/__init__.py"
+  ],
+  "scope": "both",
+  "rules": [
+    {
+      "name": "Common",
+      "files": [
+        "**/*.md",
+        "**/*.py",
+        "**/*.ts",
+        "**/*.sh"
+      ],
+      "checks": [
+        "Does this file name clearly and briefly summarize its content?",
+        {"check": "Does this file include content that is not relevant to its purpose?", "negate": true},
+        "Is this file readable and maintainable?",
+        {"check": "Does this file contain a band-aid solution?", "negate": true},
+        {"check": "Does this file contain an ad-hoc null patch?", "negate": true},
+        {"check": "Does this file contain sentences difficult for an LLM to understand?", "negate": true},
+        {"check": "Does this file contain a structure difficult for an LLM to understand?", "negate": true},
+        {"check": "Does this file contain a format difficult for an LLM to understand?", "negate": true}
+      ],
+      "fail": "Post edit check failed for {file}:\n{checks}\nNo edit applied.\nFix the content so every check passes, then retry the edit."
+    },
+    {
+      "name": "Markdown",
+      "files": [
+        "**/*.md"
+      ],
+      "context": "You are a high-quality documentation expert.",
+      "checks": [
+        "Is this file clear and easy to understand?",
+        {"check": "Does this file contain unnecessary verbosity?", "negate": true}
+      ],
+      "fail": "Post edit check failed for {file}:\n{checks}\nNo edit applied.\nFix the content so every check passes, then retry the edit."
+    },
+    {
+      "name": "Script",
+      "context": "You are a high-quality coding expert.",
+      "files": [
+        "**/*.ts",
+        "**/*.py",
+        "**/*.sh"
+      ],
+      "checks": [
+        {"check": "Does this file contain unnecessary complexity?", "negate": true}
+      ],
+      "fail": "Post edit check failed for {file}:\n{checks}\nNo edit applied.\nFix the content so every check passes, then retry the edit."
+    }
+  ]
+}

@@ -50,7 +50,7 @@ const KEY_NAMES = [
 	"COMMANDCODE_API_KEY",
 ];
 
-type Scope = "file" | "change";
+type Scope = "file" | "change" | "both";
 type OnError = "allow" | "block";
 
 // ------------------------------------------------------------------------------------------------
@@ -76,13 +76,13 @@ interface RuleConfig {
 	name?: string;
 	/** Set to false to disable a rule without deleting it. */
 	enabled?: boolean;
-	/** Glob(s) relative to the config file's directory. No slash matches the basename. */
+	/** Glob(s) relative to the config file's directory. No slash matches the basename. Prefix with `!` to exclude. */
 	files?: string | string[];
 	/** Requirements Jev answers yes/no for. */
 	checks?: Array<string | CheckSpec>;
 	/** Message returned to the model when a check fails. Supports {file} {rule} {checks} {probability}. */
 	fail?: string;
-	/** Extra context sent to Jev for this rule only. */
+	/** Extra context sent to Jev only with this rule's own request (blob). */
 	context?: string;
 	/** Default minProbability for this rule's checks. */
 	minProbability?: number;
@@ -98,10 +98,15 @@ interface HookConfig {
 	minProbability?: number;
 	onError?: OnError;
 	scope?: Scope;
+	/** Include the target file's name in the context sent to Jev (default true). */
+	includeFileName?: boolean;
 	maxFileChars?: number;
 	timeoutMs?: number;
 	fail?: string;
+	/** Extra context sent to Jev with every request (all rules). */
 	context?: string;
+	/** Glob(s) relative to the config file's directory; matching files are never checked. */
+	ignore?: string | string[];
 	rules?: RuleConfig[];
 }
 
@@ -121,6 +126,7 @@ interface ResolvedSettings {
 	minProbability: number;
 	onError: OnError;
 	scope?: Scope;
+	includeFileName: boolean;
 	maxFileChars: number;
 	timeoutMs: number;
 	fail?: string;
@@ -201,7 +207,7 @@ export default function jevHooks(pi: ExtensionAPI): void {
 			ctx.cwd,
 			scope,
 			settings.maxFileChars,
-			collectContext(settings, matched),
+			withFileName(display, settings.context, settings.includeFileName),
 		);
 		if (!proposed) return undefined;
 
@@ -356,7 +362,8 @@ function resolveSettings(chain: LoadedConfig[]): ResolvedSettings {
 		apiKeyEnv: stringSetting(chain, "apiKeyEnv"),
 		minProbability: numberSetting(chain, "minProbability") ?? DEFAULT_MIN_PROBABILITY,
 		onError: onError === "block" ? "block" : "allow",
-		scope: scope === "file" || scope === "change" ? scope : undefined,
+		scope: scope === "file" || scope === "change" || scope === "both" ? scope : undefined,
+		includeFileName: firstSetting(chain, "includeFileName") !== false,
 		maxFileChars: numberSetting(chain, "maxFileChars") ?? DEFAULT_MAX_FILE_CHARS,
 		timeoutMs: numberSetting(chain, "timeoutMs") ?? DEFAULT_TIMEOUT_MS,
 		fail: stringSetting(chain, "fail"),
@@ -392,7 +399,14 @@ function numberSetting(chain: LoadedConfig[], key: keyof HookConfig): number | u
 // Rule matching
 // ------------------------------------------------------------------------------------------------
 
+/** True when any config in the chain ignores the file, so no rule applies. */
+function isIgnored(chain: LoadedConfig[], filePath: string): boolean {
+	return chain.some((config) => matchesFilePatterns(config.config.ignore, config.baseDir, filePath));
+}
+
 function matchRules(chain: LoadedConfig[], filePath: string): MatchedRule[] {
+	if (isIgnored(chain, filePath)) return [];
+
 	const matched: MatchedRule[] = [];
 	for (const config of chain) {
 		const rules = config.config.rules;
@@ -493,14 +507,19 @@ function collectChecks(matched: MatchedRule[], fallback: number): PendingCheck[]
 	return checks;
 }
 
-function collectContext(settings: ResolvedSettings, matched: MatchedRule[]): string | undefined {
+/** Prefixes the context with the target file name so Jev can take the path into account. */
+function withFileName(file: string, context: string | undefined, include: boolean): string | undefined {
+	if (!include) return context;
+	const line = `Target file: ${file}`;
+	return context ? `${line}\n\n${context}` : line;
+}
+
+/** Global context plus the rule's own context; one blob is one rule. */
+function blobContext(base: string | undefined, rule: MatchedRule): string | undefined {
 	const parts: string[] = [];
-	if (settings.context) parts.push(settings.context);
-	for (const { rule } of matched) {
-		if (typeof rule.context === "string" && rule.context.trim().length > 0) {
-			const context = rule.context.trim();
-			parts.push(rule.name ? `${rule.name}: ${context}` : context);
-		}
+	if (base) parts.push(base);
+	if (typeof rule.rule.context === "string" && rule.rule.context.trim().length > 0) {
+		parts.push(rule.rule.context.trim());
 	}
 	return parts.length > 0 ? parts.join("\n\n") : undefined;
 }
@@ -527,32 +546,37 @@ function buildProposedContent(
 	}
 
 	const edits = Array.isArray(input.edits) ? input.edits : [];
+	const change = renderChange(edits);
 	const predicted = predictContent(absPath, edits);
-	if (scope === "file" && predicted !== undefined) {
-		if (predicted.length <= maxFileChars) return { file, scope: "file", content: predicted, context };
-		const change = renderChange(edits);
-		return change
-			? { file, scope: "change", change, context, note: "The full file is larger than maxFileChars; only the edited blocks are shown." }
-			: { file, scope: "file", ...limitText(predicted, maxFileChars), context };
+
+	if (predicted !== undefined && scope !== "change") {
+		const limited = limitText(predicted, maxFileChars);
+		if (scope === "both" && change) {
+			return { file, scope: "both", content: limited.text, change, note: limited.note, context };
+		}
+		if (scope === "file" && predicted.length > maxFileChars && change) {
+			return {
+				file,
+				scope: "change",
+				change,
+				context,
+				note: "The full file is larger than maxFileChars; only the edited blocks are shown.",
+			};
+		}
+		return { file, scope: "file", content: limited.text, note: limited.note, context };
 	}
 
-	const change = renderChange(edits);
-	if (change) {
-		return {
-			file,
-			scope: "change",
-			change,
-			context,
-			note:
-				scope === "file"
-					? "The full resulting file could not be computed; only the edited blocks are shown."
-					: undefined,
-		};
-	}
-	if (predicted !== undefined) {
-		return { file, scope: "file", ...limitText(predicted, maxFileChars), context };
-	}
-	return undefined;
+	if (!change) return undefined;
+	return {
+		file,
+		scope: "change",
+		change,
+		context,
+		note:
+			scope === "change"
+				? undefined
+				: "The full resulting file could not be computed; only the edited blocks are shown.",
+	};
 }
 
 interface EditSpec {
@@ -638,12 +662,39 @@ interface JevRequest {
 	endpoint: string;
 	model: string;
 	apiKey: string;
-	state: unknown;
+	state: ProposedContent;
 	checks: PendingCheck[];
 	timeoutMs: number;
 }
 
+/** One Jev request per matched rule: each rule is a blob with its own context. */
 async function callJev(request: JevRequest): Promise<JevOutcome> {
+	const groups = new Map<MatchedRule, PendingCheck[]>();
+	for (const check of request.checks) {
+		const list = groups.get(check.rule);
+		if (list) list.push(check);
+		else groups.set(check.rule, [check]);
+	}
+
+	const outcomes = await Promise.all(
+		[...groups].map(([rule, checks]) =>
+			callJevBlob({
+				...request,
+				checks,
+				state: { ...request.state, context: blobContext(request.state.context, rule) },
+			}),
+		),
+	);
+
+	const probabilities = new Map<string, number>();
+	for (const outcome of outcomes) {
+		if (!outcome.ok) return outcome;
+		for (const [name, value] of outcome.probabilities) probabilities.set(name, value);
+	}
+	return { ok: true, probabilities };
+}
+
+async function callJevBlob(request: JevRequest): Promise<JevOutcome> {
 	const questions: Record<string, unknown> = {};
 	for (const check of request.checks) {
 		const ask = check.negate
@@ -702,7 +753,9 @@ async function callJev(request: JevRequest): Promise<JevOutcome> {
 
 function describeState(state: unknown): string {
 	const scope = state && typeof state === "object" ? (state as { scope?: unknown }).scope : undefined;
-	return scope === "change" ? "a proposed change to a file" : "a file's complete proposed content";
+	if (scope === "change") return "a proposed change to a file";
+	if (scope === "both") return "a file's complete proposed content and the edited blocks it changes";
+	return "a file's complete proposed content";
 }
 
 function describeFetchError(error: unknown, timeoutMs: number): string {
@@ -1038,8 +1091,12 @@ async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> 
 		ctx.ui.notify(`jev-guard: ${warning}`, "warning"),
 	);
 	const settings = resolveSettings(chain);
-	const matched = matchRules(chain, absPath);
+	if (isIgnored(chain, absPath)) {
+		ctx.ui.notify(`jev-guard: ${display} is ignored by ${CONFIG_NAME}`, "info");
+		return;
+	}
 
+	const matched = matchRules(chain, absPath);
 	const checks = collectChecks(matched, settings.minProbability);
 	if (checks.length === 0) {
 		ctx.ui.notify(`jev-guard: no rules match ${display}`, "warning");
@@ -1052,7 +1109,7 @@ async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> 
 		scope: "file",
 		content: limited.text,
 		note: limited.note,
-		context: collectContext(settings, matched),
+		context: withFileName(display, settings.context, settings.includeFileName),
 	};
 	const connection = resolveConnection(settings, uniqueDirs([path.dirname(absPath), ctx.cwd]));
 	if (!connection.credential) {

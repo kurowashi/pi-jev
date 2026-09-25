@@ -399,6 +399,140 @@ test("/jev-guard check marks negated checks", async () => {
 	assert.match(report, /PASS\s+80%\s+dirty code\s+\[negated\]/);
 });
 
+test("sends one blob per rule with only that rule's context", async () => {
+	const root = makeProject({
+		".jev-guard.json": JSON.stringify({
+			context: "global context",
+			rules: [
+				{ name: "Docs", files: "**/*.md", context: "docs context", checks: ["Clear"] },
+				{ name: "Any", files: "**/*", context: "all context", checks: ["Tidy"] },
+			],
+		}),
+		"a.md": "foo\n",
+	});
+	const { toolCall } = harness();
+	const bodies: Array<{ state: { context?: string }; questions: Record<string, unknown> }> = [];
+
+	const result = await withEnv(CLEAN_ENV, () =>
+		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
+			withFetch(
+				async (_url, init) => {
+					const body = JSON.parse(String(init.body));
+					bodies.push(body);
+					const answers: Record<string, unknown> = {};
+					for (const name of Object.keys(body.questions)) answers[name] = { type: "noul", noul: 0.99 };
+					return new Response(JSON.stringify({ answers }), {
+						status: 200,
+						headers: { "content-type": "application/json" },
+					});
+				},
+				() =>
+					toolCall(
+						{
+							type: "tool_call",
+							toolName: "edit",
+							toolCallId: "1",
+							input: { path: "a.md", edits: [{ oldText: "foo", newText: "bar" }] },
+						},
+						fakeContext(root),
+					),
+			),
+		),
+	);
+
+	assert.equal(result, undefined);
+	assert.equal(bodies.length, 2);
+	assert.equal(bodies[0]!.state.context, "Target file: a.md\n\nglobal context\n\ndocs context");
+	assert.equal(bodies[1]!.state.context, "Target file: a.md\n\nglobal context\n\nall context");
+	assert.deepEqual(Object.keys(bodies[0]!.questions), ["check_0"]);
+	assert.deepEqual(Object.keys(bodies[1]!.questions), ["check_1"]);
+});
+
+test("scope both sends the whole file and the changed blocks", async () => {
+	const root = makeProject({
+		".jev-guard.json": JSON.stringify({ scope: "both", rules: [{ files: "**/*.ts", checks: ["No bar"] }] }),
+		"a.ts": "foo\n",
+	});
+	const { toolCall } = harness();
+	const ctx = fakeContext(root);
+
+	const result = await withEnv(CLEAN_ENV, () =>
+		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
+			withFetch(async (_url, init) => {
+				const body = JSON.parse(String(init.body));
+				assert.equal(body.state.scope, "both");
+				assert.equal(body.state.file, "a.ts");
+				assert.equal(body.state.content, "bar\n");
+				assert.match(body.state.change, /--- before\nfoo\n\+\+\+ after\nbar/);
+				assert.match(body.questions.check_0.instructions, /complete proposed content and the edited blocks/);
+				return jevResponse([0.99]);
+			}, () =>
+				toolCall(
+					{ type: "tool_call", toolName: "edit", toolCallId: "1", input: { path: "a.ts", edits: [{ oldText: "foo", newText: "bar" }] } },
+					ctx,
+				),
+			),
+		),
+	);
+	assert.equal(result, undefined);
+});
+
+test("scope both keeps the changed blocks when the file is truncated", async () => {
+	const root = makeProject({
+		".jev-guard.json": JSON.stringify({
+			scope: "both",
+			maxFileChars: 10,
+			rules: [{ files: "**/*.ts", checks: ["No bar"] }],
+		}),
+		"a.ts": "const value = 1;\n",
+	});
+	const { toolCall } = harness();
+
+	await withEnv(CLEAN_ENV, () =>
+		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
+			withFetch(async (_url, init) => {
+				const body = JSON.parse(String(init.body));
+				assert.equal(body.state.scope, "both");
+				assert.match(body.state.content, /characters omitted/);
+				assert.match(body.state.change, /--- before\nconst value = 1;/);
+				return jevResponse([0.99]);
+			}, () =>
+				toolCall(
+					{ type: "tool_call", toolName: "edit", toolCallId: "1", input: { path: "a.ts", edits: [{ oldText: "const value = 1;", newText: "const value = 2;" }] } },
+					fakeContext(root),
+				),
+			),
+		),
+	);
+});
+
+test("includeFileName adds the target file to the context unless disabled", async () => {
+	const rules = [{ files: "**/*.ts", checks: ["No bar"] }];
+	const contexts: Array<string | undefined> = [];
+	const run = (config: Record<string, unknown>) => {
+		const root = makeProject({ ".jev-guard.json": JSON.stringify({ ...config, rules }), "a.ts": "foo\n" });
+		const { toolCall } = harness();
+		return withEnv(CLEAN_ENV, () =>
+			withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
+				withFetch(async (_url, init) => {
+					contexts.push(JSON.parse(String(init.body)).state.context);
+					return jevResponse([0.99]);
+				}, () =>
+					toolCall(
+						{ type: "tool_call", toolName: "edit", toolCallId: "1", input: { path: "a.ts", edits: [{ oldText: "foo", newText: "bar" }] } },
+						fakeContext(root),
+					),
+				),
+			),
+		);
+	};
+
+	await run({ context: "global context" });
+	await run({ context: "global context", includeFileName: false });
+	await run({ includeFileName: false });
+	assert.deepEqual(contexts, ["Target file: a.ts\n\nglobal context", "global context", undefined]);
+});
+
 test("checks the whole written content for the write tool", async () => {
 	const root = makeProject({ ".jev-guard.json": JSON.stringify({ rules: [{ files: "**/*.md", checks: ["Japanese"] }] }) });
 	const { toolCall } = harness();
@@ -444,6 +578,108 @@ test("does not call Jev when no rule matches", async () => {
 			),
 		),
 	).then((result) => assert.equal(result, undefined));
+});
+
+test("ignore patterns skip matching files without calling Jev", async () => {
+	const root = makeProject({
+		".jev-guard.json": JSON.stringify({
+			ignore: ["**/__init__.py"],
+			rules: [{ files: "**/*.py", checks: ["No prints"] }],
+		}),
+		"pkg/__init__.py": "x = 1\n",
+	});
+	const { toolCall } = harness();
+	const ctx = fakeContext(root);
+
+	const result = await withEnv(CLEAN_ENV, () =>
+		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
+			withFetch(
+				async () => {
+					throw new Error("fetch should not be called");
+				},
+				() =>
+					toolCall(
+						{
+							type: "tool_call",
+							toolName: "edit",
+							toolCallId: "1",
+							input: { path: "pkg/__init__.py", edits: [{ oldText: "x = 1", newText: "x = 2" }] },
+						},
+						ctx,
+					),
+			),
+		),
+	);
+	assert.equal(result, undefined);
+});
+
+test("ignore supports `!` negations and basename patterns", async () => {
+	const root = makeProject({
+		".jev-guard.json": JSON.stringify({
+			ignore: ["*.py", "!keep.py"],
+			rules: [{ files: "**/*.py", checks: ["No prints"] }],
+		}),
+		"keep.py": "print(1)\n",
+		"skip.py": "print(2)\n",
+	});
+	const { toolCall } = harness();
+	const ctx = fakeContext(root);
+	const event = (file: string) => ({
+		type: "tool_call",
+		toolName: "edit",
+		toolCallId: "1",
+		input: { path: file, edits: [{ oldText: "print", newText: "log" }] },
+	});
+	const calls: string[] = [];
+
+	const result = await withEnv(CLEAN_ENV, () =>
+		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
+			withFetch(
+				async (_url, init) => {
+					calls.push(JSON.parse(String(init.body)).state.file);
+					return jevResponse([0.99]);
+				},
+				async () => ({
+					skipped: await toolCall(event("skip.py"), ctx),
+					kept: await toolCall(event("keep.py"), ctx),
+				}),
+			),
+		),
+	);
+	assert.equal(result.skipped, undefined);
+	assert.equal(result.kept, undefined);
+	assert.deepEqual(calls, ["keep.py"]);
+});
+
+test("an ignore in one config suppresses rules from other configs", async () => {
+	const root = makeProject({
+		".jev-guard.json": JSON.stringify({ rules: [{ files: "**/*.py", checks: ["No prints"] }] }),
+		"pkg/.jev-guard.json": JSON.stringify({ ignore: ["__init__.py"] }),
+		"pkg/__init__.py": "x = 1\n",
+	});
+	const { toolCall } = harness();
+	const ctx = fakeContext(root);
+
+	const result = await withEnv(CLEAN_ENV, () =>
+		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
+			withFetch(
+				async () => {
+					throw new Error("fetch should not be called");
+				},
+				() =>
+					toolCall(
+						{
+							type: "tool_call",
+							toolName: "write",
+							toolCallId: "1",
+							input: { path: "pkg/__init__.py", content: "x = 1\n" },
+						},
+						ctx,
+					),
+			),
+		),
+	);
+	assert.equal(result, undefined);
 });
 
 test("ignores project configs when the project is not trusted", async () => {
@@ -553,4 +789,28 @@ test("/jev-guard check reports each check", async () => {
 	const report = ctx.notifications.at(-1)?.message ?? "";
 	assert.match(report, /FAIL\s+20%\s+No bar/);
 	assert.match(report, /PASS\s+95%\s+Has a type/);
+});
+
+test("/jev-guard check reports ignored files", async () => {
+	const root = makeProject({
+		".jev-guard.json": JSON.stringify({
+			ignore: ["**/__init__.py"],
+			rules: [{ files: "**/*.py", checks: ["No prints"] }],
+		}),
+		"__init__.py": "x = 1\n",
+	});
+	const { commands } = harness();
+	const ctx = fakeContext(root);
+	const handler = commands.get("jev-guard");
+	assert.ok(handler);
+
+	await withEnv(CLEAN_ENV, () =>
+		withFetch(
+			async () => {
+				throw new Error("fetch should not be called");
+			},
+			() => handler("check __init__.py", ctx),
+		),
+	);
+	assert.match(ctx.notifications.at(-1)?.message ?? "", /ignored/);
 });
