@@ -1,6 +1,6 @@
 {
 	"name": "pi-jev-guard",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Semantic file-edit checks with TypeSafe Jev (System One) for Pi",
 	"keywords": [
 		"pi-package",
@@ -16,6 +16,17 @@
 		"extensions": [
 			"./src/index.ts"
 		]
+	},
+	"dependencies": {
+		"@pi-jev/core": "^0.2.0"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*"
+	},
+	"peerDependenciesMeta": {
+		"@earendil-works/pi-coding-agent": {
+			"optional": true
+		}
 	},
 	"scripts": {
 		"test": "node --test test/*.test.ts"

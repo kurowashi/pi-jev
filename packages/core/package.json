@@ -1,6 +1,6 @@
 {
 	"name": "@pi-jev/core",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Shared plumbing for the pi-jev guard plugins: config discovery, rule matching, credentials, Jev requests",
 	"license": "MIT",
 	"type": "module",
