@@ -1,0 +1,33 @@
+{
+  "enabled": true,
+  "minProbability": 0.5,
+  "onError": "allow",
+  "onlyNewFiles": true,
+  "includeContent": true,
+  "maxTreeEntries": 400,
+  "maxTreeDepth": 5,
+  "context": "src/ contains application code grouped by feature. tests/ mirrors src/. docs/ holds documentation. New source files belong next to the feature they serve, not at the repository root.",
+  "rules": [
+    {
+      "name": "Application code",
+      "files": ["src/**/*.ts", "src/**/*.tsx"],
+      "checks": [
+        "Is the new file placed in the feature directory it belongs to?",
+        "Is the new file's name consistent with the kebab-case names of its sibling files?",
+        {"check": "Does the new file duplicate an existing module's responsibility?", "negate": true},
+        {"check": "Is the new file placed at src/ root although it belongs to a feature?", "negate": true}
+      ],
+      "fail": "Jev placement check failed for {file}:\n{checks}\nChoose a directory or file name that fits the existing tree, then retry the write."
+    },
+    {
+      "name": "Documentation",
+      "files": "**/*.md",
+      "context": "Documentation is written in Japanese and grouped by topic under docs/.",
+      "checks": [
+        "Is the document placed in the directory matching its topic?",
+        {"check": "Does the document overlap with an existing document?", "negate": true}
+      ],
+      "fail": "Jev placement check failed for {file}:\n{checks}\nPlace the document with the other documents on the same topic."
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "enabled": true,
+  "minProbability": 0.5,
+  "onError": "allow",
+  "onlyNewFiles": true,
+  "includeContent": true,
+  "context": "This repository is a Pi plugin. Source lives in extensions/, tests in test/, and documentation in the repository root.",
+  "rules": [
+    {
+      "name": "Placement",
+      "files": [
+        "**/*.ts",
+        "**/*.json",
+        "**/*.md"
+      ],
+      "checks": [
+        "Is the new file placed in the directory that best matches its purpose in the existing project structure?",
+        "Is the new file grouped with related files rather than placed in an unrelated directory?",
+        "Is the new file's name consistent with the naming conventions of the existing files?",
+        {"check": "Does the new file duplicate or overlap with an existing file?", "negate": true},
+        {"check": "Does the new file introduce a new directory without a clear reason?", "negate": true}
+      ],
+      "fail": "Post write placement check failed for {file}:\n{checks}\nNo file created.\nChoose a directory or file name that fits the existing tree, then retry the write."
+    }
+  ]
+}
