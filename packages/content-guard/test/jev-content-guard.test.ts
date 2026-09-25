@@ -72,7 +72,7 @@ function fakeContext(cwd: string, trusted = true): FakeContext {
 }
 
 function makeProject(files: Record<string, string>): string {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "jev-guard-"));
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "jev-content-guard-"));
 	for (const [name, content] of Object.entries(files)) {
 		const target = path.join(root, name);
 		fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -125,7 +125,7 @@ const CLEAN_ENV = {
 	OPENCODE_ZEN_API_KEY: undefined,
 	COMMANDCODE_API_KEY: undefined,
 	SYSTEMONE_ENDPOINT: undefined,
-	JEV_GUARD_DISABLE: undefined,
+	JEV_CONTENT_GUARD_DISABLE: undefined,
 };
 
 // ------------------------------------------------------------------------------------------------
@@ -195,7 +195,7 @@ test("predictContent refuses ambiguous or missing matches", () => {
 
 test("blocks an edit when Jev rejects a check", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({
+		".jev-content-guard.json": JSON.stringify({
 			rules: [{ name: "TS", files: "**/*.ts", checks: ["No bar"], fail: "blocked: {checks}" }],
 		}),
 		"src/a.ts": "foo\n",
@@ -241,7 +241,7 @@ test("blocks an edit when Jev rejects a check", async () => {
 
 test("allows an edit when every check passes", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({ rules: [{ files: "*.ts", checks: ["No bar"] }] }),
+		".jev-content-guard.json": JSON.stringify({ rules: [{ files: "*.ts", checks: ["No bar"] }] }),
 		"a.ts": "foo\n",
 	});
 	const { toolCall } = harness();
@@ -263,7 +263,7 @@ test("allows an edit when every check passes", async () => {
 
 test("negate asks for the failure mode and inverts its probability", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({
+		".jev-content-guard.json": JSON.stringify({
 			rules: [
 				{
 					name: "Quality",
@@ -308,7 +308,7 @@ test("negate asks for the failure mode and inverts its probability", async () =>
 
 test("negate allows the edit when the failure mode is unlikely", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({
+		".jev-content-guard.json": JSON.stringify({
 			rules: [{ files: "**/*.ts", checks: [{ check: "dirty code", negate: true }] }],
 		}),
 		"a.ts": "foo\n",
@@ -336,7 +336,7 @@ test("negate allows the edit when the failure mode is unlikely", async () => {
 
 test("rule-level negate applies to its checks and per-check negate overrides it", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({
+		".jev-content-guard.json": JSON.stringify({
 			rules: [
 				{
 					files: "**/*.ts",
@@ -378,16 +378,16 @@ test("rule-level negate applies to its checks and per-check negate overrides it"
 	assert.doesNotMatch(block.reason, /No debug prints/);
 });
 
-test("/jev-guard check marks negated checks", async () => {
+test("/jev-content-guard check marks negated checks", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({
+		".jev-content-guard.json": JSON.stringify({
 			rules: [{ files: "**/*.ts", checks: [{ check: "dirty code", negate: true }] }],
 		}),
 		"a.ts": "foo\n",
 	});
 	const { commands } = harness();
 	const ctx = fakeContext(root);
-	const handler = commands.get("jev-guard");
+	const handler = commands.get("jev-content-guard");
 	assert.ok(handler);
 
 	await withEnv(CLEAN_ENV, () =>
@@ -402,7 +402,7 @@ test("/jev-guard check marks negated checks", async () => {
 
 test("merges all matching rules into one request with their contexts", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({
+		".jev-content-guard.json": JSON.stringify({
 			context: "global context",
 			rules: [
 				{ name: "Docs", files: "**/*.md", context: "docs context", checks: ["Clear"] },
@@ -452,7 +452,7 @@ test("merges all matching rules into one request with their contexts", async () 
 
 test("scope both sends the whole file and the changed blocks", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({ scope: "both", rules: [{ files: "**/*.ts", checks: ["No bar"] }] }),
+		".jev-content-guard.json": JSON.stringify({ scope: "both", rules: [{ files: "**/*.ts", checks: ["No bar"] }] }),
 		"a.ts": "foo\n",
 	});
 	const { toolCall } = harness();
@@ -482,7 +482,7 @@ test("scope both sends the whole file and the changed blocks", async () => {
 
 test("scope both keeps the changed blocks when the file is truncated", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({
+		".jev-content-guard.json": JSON.stringify({
 			scope: "both",
 			maxFileChars: 10,
 			rules: [{ files: "**/*.ts", checks: ["No bar"] }],
@@ -513,7 +513,7 @@ test("includeFileName adds the project-relative file line unless disabled", asyn
 	const rules = [{ files: "**/*.ts", checks: ["No bar"] }];
 	const states: string[] = [];
 	const run = (config: Record<string, unknown>) => {
-		const root = makeProject({ ".jev-guard.json": JSON.stringify({ ...config, rules }), "src/a.ts": "foo\n" });
+		const root = makeProject({ ".jev-content-guard.json": JSON.stringify({ ...config, rules }), "src/a.ts": "foo\n" });
 		const { toolCall } = harness();
 		return withEnv(CLEAN_ENV, () =>
 			withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
@@ -541,7 +541,7 @@ test("includeFileName adds the project-relative file line unless disabled", asyn
 });
 
 test("checks the whole written content for the write tool", async () => {
-	const root = makeProject({ ".jev-guard.json": JSON.stringify({ rules: [{ files: "**/*.md", checks: ["Japanese"] }] }) });
+	const root = makeProject({ ".jev-content-guard.json": JSON.stringify({ rules: [{ files: "**/*.md", checks: ["Japanese"] }] }) });
 	const { toolCall } = harness();
 	const ctx = fakeContext(root);
 
@@ -563,7 +563,7 @@ test("checks the whole written content for the write tool", async () => {
 
 test("does not call Jev when no rule matches", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({ rules: [{ files: "**/*.py", checks: ["No prints"] }] }),
+		".jev-content-guard.json": JSON.stringify({ rules: [{ files: "**/*.py", checks: ["No prints"] }] }),
 		"a.ts": "foo\n",
 	});
 	const { toolCall } = harness();
@@ -587,7 +587,7 @@ test("does not call Jev when no rule matches", async () => {
 
 test("ignore patterns skip matching files without calling Jev", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({
+		".jev-content-guard.json": JSON.stringify({
 			ignore: ["**/__init__.py"],
 			rules: [{ files: "**/*.py", checks: ["No prints"] }],
 		}),
@@ -620,7 +620,7 @@ test("ignore patterns skip matching files without calling Jev", async () => {
 
 test("ignore supports `!` negations and basename patterns", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({
+		".jev-content-guard.json": JSON.stringify({
 			ignore: ["*.py", "!keep.py"],
 			rules: [{ files: "**/*.py", checks: ["No prints"] }],
 		}),
@@ -659,8 +659,8 @@ test("ignore supports `!` negations and basename patterns", async () => {
 
 test("a nearer config replaces the root config instead of merging", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({ rules: [{ files: "**/*.py", checks: ["No prints"] }] }),
-		"pkg/.jev-guard.json": JSON.stringify({ ignore: ["__init__.py"] }),
+		".jev-content-guard.json": JSON.stringify({ rules: [{ files: "**/*.py", checks: ["No prints"] }] }),
+		"pkg/.jev-content-guard.json": JSON.stringify({ ignore: ["__init__.py"] }),
 		"pkg/__init__.py": "x = 1\n",
 		"pkg/app.py": "x = 1\n",
 	});
@@ -697,7 +697,7 @@ test("a nearer config replaces the root config instead of merging", async () => 
 
 test("ignores project configs when the project is not trusted", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({ rules: [{ files: "**/*.ts", checks: ["No bar"] }] }),
+		".jev-content-guard.json": JSON.stringify({ rules: [{ files: "**/*.ts", checks: ["No bar"] }] }),
 		"a.ts": "foo\n",
 	});
 	const { toolCall } = harness();
@@ -724,7 +724,7 @@ test("ignores project configs when the project is not trusted", async () => {
 
 test("fails open on Jev errors by default and fails closed with onError block", async () => {
 	const files = {
-		".jev-guard.json": JSON.stringify({ rules: [{ files: "**/*.ts", checks: ["No bar"] }] }),
+		".jev-content-guard.json": JSON.stringify({ rules: [{ files: "**/*.ts", checks: ["No bar"] }] }),
 		"a.ts": "foo\n",
 	};
 	const event = {
@@ -744,7 +744,7 @@ test("fails open on Jev errors by default and fails closed with onError block", 
 	assert.equal(openResult, undefined);
 
 	const strictRoot = makeProject({
-		".jev-guard.json": JSON.stringify({ onError: "block", rules: [{ files: "**/*.ts", checks: ["No bar"] }] }),
+		".jev-content-guard.json": JSON.stringify({ onError: "block", rules: [{ files: "**/*.ts", checks: ["No bar"] }] }),
 		"a.ts": "foo\n",
 	});
 	const strict = harness();
@@ -759,7 +759,7 @@ test("fails open on Jev errors by default and fails closed with onError block", 
 
 test("sends the documented Jev request shape", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({ rules: [{ files: "**/*.ts", checks: ["No bar"] }] }),
+		".jev-content-guard.json": JSON.stringify({ rules: [{ files: "**/*.ts", checks: ["No bar"] }] }),
 		"a.ts": "foo\n",
 	});
 	const { toolCall } = harness();
@@ -811,7 +811,7 @@ test("sends the documented Jev request shape", async () => {
 
 test("selects the OpenRouter endpoint when only OPENROUTER_API_KEY is available", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({ rules: [{ files: "**/*.ts", checks: ["No bar"] }] }),
+		".jev-content-guard.json": JSON.stringify({ rules: [{ files: "**/*.ts", checks: ["No bar"] }] }),
 		"a.ts": "foo\n",
 		".env": 'OPENROUTER_API_KEY="from-dotenv"\n',
 	});
@@ -835,14 +835,14 @@ test("selects the OpenRouter endpoint when only OPENROUTER_API_KEY is available"
 	).then((result) => assert.equal(result, undefined));
 });
 
-test("/jev-guard check reports each check", async () => {
+test("/jev-content-guard check reports each check", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({ rules: [{ files: "**/*.ts", checks: ["No bar", "Has a type"] }] }),
+		".jev-content-guard.json": JSON.stringify({ rules: [{ files: "**/*.ts", checks: ["No bar", "Has a type"] }] }),
 		"a.ts": "foo\n",
 	});
 	const { commands } = harness();
 	const ctx = fakeContext(root);
-	const handler = commands.get("jev-guard");
+	const handler = commands.get("jev-content-guard");
 	assert.ok(handler);
 
 	await withEnv(CLEAN_ENV, () =>
@@ -858,9 +858,9 @@ test("/jev-guard check reports each check", async () => {
 	assert.match(report, /file: a\.ts/);
 });
 
-test("/jev-guard context shows the merged request without calling Jev", async () => {
+test("/jev-content-guard context shows the merged request without calling Jev", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({
+		".jev-content-guard.json": JSON.stringify({
 			context: "Global edit convention.",
 			rules: [
 				{ name: "TS", files: "**/*.ts", context: "TS rule context.", checks: ["No bar"] },
@@ -871,15 +871,15 @@ test("/jev-guard context shows the merged request without calling Jev", async ()
 	});
 	const { commands } = harness();
 	const ctx = fakeContext(root);
-	const handler = commands.get("jev-guard");
+	const handler = commands.get("jev-content-guard");
 	assert.ok(handler);
 
 	await withEnv(CLEAN_ENV, () => handler("context a.ts", ctx));
 
 	const report = ctx.notifications.at(-1)?.message ?? "";
-	assert.match(report, /jev-guard context: a\.ts/);
-	assert.match(report, /config: .*\.jev-guard\.json — 2 rule\(s\)/);
-	assert.match(report, /context \(from .*\.jev-guard\.json\)/);
+	assert.match(report, /jev-content-guard context: a\.ts/);
+	assert.match(report, /config: .*\.jev-content-guard\.json — 2 rule\(s\)/);
+	assert.match(report, /context \(from .*\.jev-content-guard\.json\)/);
 	assert.match(report, /Global edit convention\./);
 	assert.match(report, /rules merged into one request: 1 — TS/);
 	assert.match(report, /merged context \(2 part\(s\)\):/);
@@ -889,26 +889,26 @@ test("/jev-guard context shows the merged request without calling Jev", async ()
 	assert.match(report, /file: a\.ts/);
 });
 
-test("/jev-guard context without a file lists the adopted context", async () => {
+test("/jev-content-guard context without a file lists the adopted context", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({ context: "Only top.", rules: [] }),
+		".jev-content-guard.json": JSON.stringify({ context: "Only top.", rules: [] }),
 	});
 	const { commands } = harness();
 	const ctx = fakeContext(root);
-	const handler = commands.get("jev-guard");
+	const handler = commands.get("jev-content-guard");
 	assert.ok(handler);
 
 	await withEnv(CLEAN_ENV, () => handler("context", ctx));
 
 	const report = ctx.notifications.at(-1)?.message ?? "";
-	assert.match(report, /jev-guard context\b/);
+	assert.match(report, /jev-content-guard context\b/);
 	assert.match(report, /Only top\./);
 	assert.match(report, /Rules need a target file/);
 });
 
-test("/jev-guard check reports ignored files", async () => {
+test("/jev-content-guard check reports ignored files", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({
+		".jev-content-guard.json": JSON.stringify({
 			ignore: ["**/__init__.py"],
 			rules: [{ files: "**/*.py", checks: ["No prints"] }],
 		}),
@@ -916,7 +916,7 @@ test("/jev-guard check reports ignored files", async () => {
 	});
 	const { commands } = harness();
 	const ctx = fakeContext(root);
-	const handler = commands.get("jev-guard");
+	const handler = commands.get("jev-content-guard");
 	assert.ok(handler);
 
 	await withEnv(CLEAN_ENV, () =>

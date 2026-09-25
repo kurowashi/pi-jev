@@ -71,9 +71,9 @@ export function percent(probability: number): string {
 
 /** Guard identity used in the messages core renders. */
 export interface GuardFlavor {
-	/** Status/notification prefix, e.g. "jev-guard". */
+	/** Status/notification prefix, e.g. "jev-content-guard". */
 	name: string;
-	/** Config file name, e.g. ".jev-guard.json". */
+	/** Config file name, e.g. ".jev-content-guard.json". */
 	configName: string;
 	/** Label in "Jev check could not run", e.g. "Jev check" or "Jev placement check". */
 	checkLabel: string;

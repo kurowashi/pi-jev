@@ -1,4 +1,4 @@
-# pi-jev-guard
+# pi-jev-content-guard
 
 `edit` / `write` の内容を **Jev（TypeSafe System One）** で意味的にチェックする Pi 拡張です。
 合格しない編集は実行前にブロックし、`fail` に書いた文字列をモデルへ返します。
@@ -6,7 +6,7 @@
 ## 動作の流れ
 
 1. `edit` / `write` のツールコールで起動する
-2. 対象ファイルのディレクトリから上位へ `.jev-guard.json` を探し、**最初に見つかった 1 つ**を使う（信頼済みの作業ディレクトリ内のみ）
+2. 対象ファイルのディレクトリから上位へ `.jev-content-guard.json` を探し、**最初に見つかった 1 つ**を使う（信頼済みの作業ディレクトリ内のみ）
 3. `ignore` にマッチしたファイルはそのまま通す
 4. マッチしたルールの checks と context を 1 つにまとめ、Jev へ yes/no の質問として送る
 5. すべて合格なら編集を実行。1 つでも不合格ならツールコールを失敗させ、`fail` の文字列を返す
@@ -16,22 +16,22 @@
 - ファイル（glob）ごとにチェック内容を切り替える
 - ルール単位・チェック単位で `minProbability` と `negate` を指定する
 - 複数ルールを 1 リクエストにまとめる（API アクセスはファイルごとに 1 回）
-- `/jev-guard context <file>` で、Jev に送る内容を確認する
+- `/jev-content-guard context <file>` で、Jev に送る内容を確認する
 
 ## インストール
 
 ```bash
 npm install                                # @pi-jev/core の workspace リンクを作る
-pi install /path/to/pi-jev/packages/guard  # パッケージとして追加
+pi install /path/to/pi-jev/packages/content-guard  # パッケージとして追加
 ```
 
 `@pi-jev/core` を参照するため、ファイル 1 つを `~/.pi/agent/extensions/` へコピーする使い方はできません。
 
 ## クイックスタート
 
-1. `/jev-guard init` で `.jev-guard.json` の雛形を作る
+1. `/jev-content-guard init` で `.jev-content-guard.json` の雛形を作る
 2. ルールを書く
-3. `/jev-guard check src/index.ts` で結果を確認する
+3. `/jev-content-guard check src/index.ts` で結果を確認する
 
 ```json
 {
@@ -55,7 +55,7 @@ pi install /path/to/pi-jev/packages/guard  # パッケージとして追加
 
 ## 設定ファイル
 
-`.jev-guard.json` は対象ファイルのディレクトリから上位（ファイルシステム root まで）へ探し、
+`.jev-content-guard.json` は対象ファイルのディレクトリから上位（ファイルシステム root まで）へ探し、
 最初に見つかった 1 つだけを使います。複数ファイルのマージもユーザー共通設定もありません。
 共通の設定はリポジトリ root など祖先のディレクトリに 1 枚置いてください。
 
@@ -107,7 +107,7 @@ glob は `**`（任意の階層）、`*`（同一階層内）、`?`（1 文字�
 
 - 文字列 1 つでも配列でも指定できます。`/` を含まないパターンはファイル名にマッチします。
 - `!` で除外を打ち消せます（例: `["*.py", "!keep.py"]` では `keep.py` だけチェックされます）。
-- `/jev-guard check` は `ignored` と表示し、Jev には接続しません。
+- `/jev-content-guard check` は `ignored` と表示し、Jev には接続しません。
 
 ### `negate`：否定形を肯定形に置き換える
 
@@ -158,13 +158,13 @@ Jev は否定形より肯定形のほうが精度よく答えることがあり�
 
 | コマンド | 説明 |
 |---|---|
-| `/jev-guard` | 設定・エンドポイント・キーの状態を表示 |
-| `/jev-guard init` | `.jev-guard.json` の雛形を作業ディレクトリに作成 |
-| `/jev-guard check <file>` | 編集せずに現在の内容でチェック |
-| `/jev-guard context [<file>]` | 送信される context と state を表示 |
-| `/jev-guard on` / `off` | このセッションのチェックを有効化 / 無効化 |
+| `/jev-content-guard` | 設定・エンドポイント・キーの状態を表示 |
+| `/jev-content-guard init` | `.jev-content-guard.json` の雛形を作業ディレクトリに作成 |
+| `/jev-content-guard check <file>` | 編集せずに現在の内容でチェック |
+| `/jev-content-guard context [<file>]` | 送信される context と state を表示 |
+| `/jev-content-guard on` / `off` | このセッションのチェックを有効化 / 無効化 |
 
-`JEV_GUARD_DISABLE=1` で常時無効にできます。
+`JEV_CONTENT_GUARD_DISABLE=1` で常時無効にできます。
 
 ## Jev に送られる内容
 
@@ -188,12 +188,12 @@ file edit
 - `file:` 行は `includeFileName: false` で消せます。
 - `file edit` は `scope` に応じて含まれます。
 
-`/jev-guard context <file>` は **Jev へ接続せず**、同じ内容を表示します
+`/jev-content-guard context <file>` は **Jev へ接続せず**、同じ内容を表示します
 （`<file>` 省略時は採用される設定の `context` だけ）。
 
 ````
-jev-guard context: docs/README.md
-config: /repo/.jev-guard.json — 2 rule(s)
+jev-content-guard context: docs/README.md
+config: /repo/.jev-content-guard.json — 2 rule(s)
 enabled: true   includeFileName: true
 
 context: (none)
@@ -211,7 +211,7 @@ state sent to Jev (whole file; an edit request follows `scope`):
 ----
 ````
 
-`/jev-guard check <file>` の結果にも `state sent to Jev:` が付きます（長い state は省略されます）。
+`/jev-content-guard check <file>` の結果にも `state sent to Jev:` が付きます（長い state は省略されます）。
 
 ## API キーとエンドポイント
 
@@ -245,7 +245,7 @@ state sent to Jev (whole file; an edit request follows `scope`):
 ## セキュリティ上の注意
 
 - 編集内容（ファイル全体・変更部分・その両方）と `context` は Jev のエンドポイントへ送信されます。機密情報を含むファイルではルールを絞ってください。
-- `.jev-guard.json` は作業ディレクトリが信頼されている場合のみ有効です。未信頼のプロジェクトでは警告を表示して無視します。
+- `.jev-content-guard.json` は作業ディレクトリが信頼されている場合のみ有効です。未信頼のプロジェクトでは警告を表示して無視します。
 - 探索はファイルシステム root まで行くため、信頼済みの作業ディレクトリより上にある設定も採用されます。親ディレクトリを共有する環境では注意してください。
 - 作業ディレクトリ外のファイルにはプロジェクト設定を適用しません。
 - `onError` の既定は `"allow"` です。Jev が落ちていても編集を通しますが、厳密に止めたい場合は `"block"` を設定してください。
@@ -255,7 +255,7 @@ state sent to Jev (whole file; an edit request follows `scope`):
 - フックするのは `edit` と `write` だけです。`bash` などによるファイル変更は対象外です。
 - `scope: "file"` / `"both"` の edit は、編集ツールと同じ完全一致の置換で編集後ファイルを予測します。予測できない場合は変更部分のみをチェックします。
 - Jev の回答は確率です。`minProbability` で感度を調整してください（既定 `0.5`）。
-- `pi-jev-tree-guard` を併用すると、新規 `write` は内容（このプラグイン）と配置（tree-guard）の 2 リクエストになります。入力も context も異なるため、1 つにはまとめられません。
+- `pi-jev-placement-guard` を併用すると、新規 `write` は内容（このプラグイン）と配置（placement-guard）の 2 リクエストになります。入力も context も異なるため、1 つにはまとめられません。
 
 ## 開発
 
@@ -266,8 +266,8 @@ npm test        # node:test（モックした Jev エンドポイントで検証
 実際の Jev に対する簡易 E2E:
 
 ```bash
-cd /tmp/jev-e2e   # .jev-guard.json と対象ファイルを用意
+cd /tmp/jev-e2e   # .jev-content-guard.json と対象ファイルを用意
 pi -p --no-session --model <provider>/<model> \
-  --extension /path/to/pi-jev/packages/guard/src/index.ts \
+  --extension /path/to/pi-jev/packages/content-guard/src/index.ts \
   "note.txt に BANANA という行を追加して"
 ```

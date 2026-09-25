@@ -1,5 +1,5 @@
 {
-	"name": "pi-jev-tree-guard",
+	"name": "pi-jev-placement-guard",
 	"version": "0.2.0",
 	"description": "Semantic placement checks for newly created files with TypeSafe Jev (System One) for Pi",
 	"keywords": [

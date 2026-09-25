@@ -1,17 +1,17 @@
-# pi-jev-tree-guard
+# pi-jev-placement-guard
 
 新規ファイルの作成（`write`）を **Jev（TypeSafe System One）** で配置チェックする Pi 拡張です。
 既存のツリーとこれから追加するファイルを Jev に渡し、「その場所・その名前でよいか」を判定します。
 合格しない作成は実行前にブロックし、`fail` に書いた文字列をモデルへ返します。
 
-編集内容のチェックは姉妹プラグイン `pi-jev-guard` が担当します。併用する場合、`edit` は
-`pi-jev-guard` だけが、新規 `write` は `pi-jev-guard`（内容）とこのプラグイン（配置）の
+編集内容のチェックは姉妹プラグイン `pi-jev-content-guard` が担当します。併用する場合、`edit` は
+`pi-jev-content-guard` だけが、新規 `write` は `pi-jev-content-guard`（内容）とこのプラグイン（配置）の
 両方がチェックします。入力も context も異なるため、リクエストは 2 つに分かれます。
 
 ## 動作の流れ
 
 1. `write` のツールコールで起動する。既存ファイルの上書きは、既定（`onlyNewFiles: true`）ではそのまま通す
-2. 対象ファイルのディレクトリから上位へ `.jev-tree-guard.json` を探し、**最初に見つかった 1 つ**を使う（信頼済みの作業ディレクトリ内のみ）
+2. 対象ファイルのディレクトリから上位へ `.jev-placement-guard.json` を探し、**最初に見つかった 1 つ**を使う（信頼済みの作業ディレクトリ内のみ）
 3. `ignore` にマッチしたファイルはそのまま通す
 4. マッチしたルールの checks と context を 1 つにまとめ、ツリーとファイル内容を付けて Jev へ送る
 5. すべて合格なら作成を実行。1 つでも不合格ならツールコールを失敗させ、`fail` の文字列を返す
@@ -21,22 +21,22 @@
 - 追加するファイルを `login.ts (new)`、作成されるディレクトリを `auth/ (new dir)` としてツリーに示す
 - ファイル（glob）ごとにチェック内容を切り替える
 - ツリーを `maxTreeEntries` / `maxTreeDepth` / `treeIgnore` で絞る
-- `/jev-tree-guard context <file>` で、Jev に送る内容を確認する
+- `/jev-placement-guard context <file>` で、Jev に送る内容を確認する
 
 ## インストール
 
 ```bash
 npm install                                     # @pi-jev/core の workspace リンクを作る
-pi install /path/to/pi-jev/packages/tree-guard  # パッケージとして追加
+pi install /path/to/pi-jev/packages/placement-guard  # パッケージとして追加
 ```
 
 `@pi-jev/core` を参照するため、ファイル 1 つを `~/.pi/agent/extensions/` へコピーする使い方はできません。
 
 ## クイックスタート
 
-1. `/jev-tree-guard init` で `.jev-tree-guard.json` の雛形を作る
+1. `/jev-placement-guard init` で `.jev-placement-guard.json` の雛形を作る
 2. `context` にディレクトリ構成と命名規則を書き、ルールを書く
-3. `/jev-tree-guard check src/features/auth/login.ts` で結果を確認する
+3. `/jev-placement-guard check src/features/auth/login.ts` で結果を確認する
 
 `check` は対象が存在しなくても、既に存在していても実行できます。既存ファイルは
 「新規作成するつもり」としてツリーから除いて判定するため、配置の見直しにも使えます。
@@ -65,7 +65,7 @@ pi install /path/to/pi-jev/packages/tree-guard  # パッケージとして追加
 
 ## 設定ファイル
 
-`.jev-tree-guard.json` は対象ファイルのディレクトリから上位（ファイルシステム root まで）へ探し、
+`.jev-placement-guard.json` は対象ファイルのディレクトリから上位（ファイルシステム root まで）へ探し、
 最初に見つかった 1 つだけを使います。複数ファイルのマージもユーザー共通設定もありません。
 共通の設定はリポジトリ root など祖先のディレクトリに 1 枚置いてください。
 
@@ -177,15 +177,15 @@ export function login() { ... }
   `tree: N entries (truncated)` / `(depth limited)`）。
 - `file content` は `includeContent: false` で省略できます。
 
-`/jev-tree-guard context <file>` は **Jev へ接続せず**、同じ内容を表示します
+`/jev-placement-guard context <file>` は **Jev へ接続せず**、同じ内容を表示します
 （`<file>` 省略時は採用される設定の `context` だけ）。
 
 ````
-jev-tree-guard context: src/features/login.ts
-config: /repo/.jev-tree-guard.json — 2 rule(s)
+jev-placement-guard context: src/features/login.ts
+config: /repo/.jev-placement-guard.json — 2 rule(s)
 enabled: true   onlyNewFiles: true   includeFileName: true
 
-context (from /repo/.jev-tree-guard.json):
+context (from /repo/.jev-placement-guard.json):
 ----
 src/ は機能単位で分割する。
 ----
@@ -205,24 +205,24 @@ state sent to Jev (as a new file):
 ----
 ````
 
-`/jev-tree-guard check <file>` の結果にも `state sent to Jev:` が付きます（長い state は省略されます）。
+`/jev-placement-guard check <file>` の結果にも `state sent to Jev:` が付きます（長い state は省略されます）。
 
 ## コマンド
 
 | コマンド | 説明 |
 |---|---|
-| `/jev-tree-guard` | 設定・エンドポイント・キーの状態を表示 |
-| `/jev-tree-guard init` | `.jev-tree-guard.json` の雛形を作業ディレクトリに作成 |
-| `/jev-tree-guard check <file>` | 作成せずに配置チェックを実行（既存ファイルは「新規」として扱う） |
-| `/jev-tree-guard context [<file>]` | 送信される context と state を表示 |
-| `/jev-tree-guard on` / `off` | このセッションのチェックを有効化 / 無効化 |
+| `/jev-placement-guard` | 設定・エンドポイント・キーの状態を表示 |
+| `/jev-placement-guard init` | `.jev-placement-guard.json` の雛形を作業ディレクトリに作成 |
+| `/jev-placement-guard check <file>` | 作成せずに配置チェックを実行（既存ファイルは「新規」として扱う） |
+| `/jev-placement-guard context [<file>]` | 送信される context と state を表示 |
+| `/jev-placement-guard on` / `off` | このセッションのチェックを有効化 / 無効化 |
 
-`JEV_TREE_GUARD_DISABLE=1` で常時無効にできます。
+`JEV_PLACEMENT_GUARD_DISABLE=1` で常時無効にできます。
 
 ## API キーとエンドポイント
 
 `process.env` を先に見て、無ければ対象ファイルと作業ディレクトリから上位へ `.env` を探します。
-使うキーは `apiKeyEnv` → 汎用名 → エンドポイント固有名の順です（`pi-jev-guard` と同じ）。
+使うキーは `apiKeyEnv` → 汎用名 → エンドポイント固有名の順です（`pi-jev-content-guard` と同じ）。
 
 | エンドポイント | 環境変数 | 既定モデル |
 |---|---|---|
@@ -243,7 +243,7 @@ state sent to Jev (as a new file):
 ## セキュリティ上の注意
 
 - プロジェクトのツリー、作成しようとしているファイルの内容、`context` は Jev のエンドポイントへ送信されます。機密情報を含むリポジトリではルールと `treeIgnore` を絞ってください。
-- `.jev-tree-guard.json` は作業ディレクトリが信頼されている場合のみ有効です。未信頼のプロジェクトでは警告を表示して無視します。
+- `.jev-placement-guard.json` は作業ディレクトリが信頼されている場合のみ有効です。未信頼のプロジェクトでは警告を表示して無視します。
 - 探索はファイルシステム root まで行くため、信頼済みの作業ディレクトリより上にある設定も採用されます。親ディレクトリを共有する環境では注意してください。
 - 作業ディレクトリ外を対象にした `write` は、ツリーが無いため警告を出して通過します。
 - `onError` の既定は `"allow"` です。Jev が落ちていても作成を通しますが、厳密に止めたい場合は `"block"` を設定してください。
@@ -264,8 +264,8 @@ npm test        # node:test（モックした Jev エンドポイントで検証
 実際の Jev に対する簡易 E2E:
 
 ```bash
-cd /tmp/jev-tree-e2e   # .jev-tree-guard.json と src/ などを用意
+cd /tmp/jev-tree-e2e   # .jev-placement-guard.json と src/ などを用意
 pi -p --no-session --model <provider>/<model> \
-  --extension /path/to/pi-jev/packages/tree-guard/src/index.ts \
+  --extension /path/to/pi-jev/packages/placement-guard/src/index.ts \
   "src/ に新しいモジュールを追加して"
 ```

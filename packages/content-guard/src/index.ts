@@ -1,8 +1,8 @@
 /**
- * jev-guard — semantic file-edit checks backed by TypeSafe Jev (System One).
+ * jev-content-guard — semantic file-edit checks backed by TypeSafe Jev (System One).
  *
  * Hooks the `edit` and `write` tool calls. For each target file it finds the
- * nearest `.jev-guard.json` on the way up to the filesystem root (AGENTS.md-style
+ * nearest `.jev-content-guard.json` on the way up to the filesystem root (AGENTS.md-style
  * discovery), matches the file against the configured rules, and asks Jev
  * whether the proposed content satisfies each check.
  *
@@ -69,10 +69,10 @@ export { globToRegExp, parseDotEnv, renderTemplate } from "@pi-jev/core";
 // Constants
 // ------------------------------------------------------------------------------------------------
 
-const NAME = "jev-guard";
-const CONFIG_NAME = ".jev-guard.json";
-const STATUS_KEY = "jev-guard";
-const CONTEXT_COMMAND = "/jev-guard context";
+const NAME = "jev-content-guard";
+const CONFIG_NAME = ".jev-content-guard.json";
+const STATUS_KEY = "jev-content-guard";
+const CONTEXT_COMMAND = "/jev-content-guard context";
 
 /** Messages core renders on this guard's behalf. */
 const FLAVOR: GuardFlavor = {
@@ -113,7 +113,7 @@ export default function jevHooks(pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_call", async (event, ctx): Promise<ToolCallEventResult | undefined> => {
-		if (!sessionEnabled || disabledByEnv("JEV_GUARD_DISABLE")) return undefined;
+		if (!sessionEnabled || disabledByEnv("JEV_CONTENT_GUARD_DISABLE")) return undefined;
 		if (event.toolName !== "edit" && event.toolName !== "write") return undefined;
 
 		const input = event.input as Record<string, unknown>;
@@ -204,8 +204,8 @@ export default function jevHooks(pi: ExtensionAPI): void {
 		);
 	};
 
-	pi.registerCommand("jev-guard", {
-		description: "Show, initialize, or dry-run .jev-guard.json semantic checks",
+	pi.registerCommand("jev-content-guard", {
+		description: "Show, initialize, or dry-run .jev-content-guard.json semantic checks",
 		handler: commandHandler,
 	});
 }
@@ -387,11 +387,11 @@ function describeState(state: ProposedContent, includeFileName: boolean): string
 
 function helpText(): string {
 	return [
-		"/jev-guard             show status",
-		"/jev-guard init        write a starter .jev-guard.json in the working directory",
-		"/jev-guard check FILE  run the matching checks against FILE without editing it",
-		"/jev-guard context [FILE]  show the merged context and the state sent to Jev",
-		"/jev-guard on | off    enable or disable checks for this session",
+		"/jev-content-guard             show status",
+		"/jev-content-guard init        write a starter .jev-content-guard.json in the working directory",
+		"/jev-content-guard check FILE  run the matching checks against FILE without editing it",
+		"/jev-content-guard context [FILE]  show the merged context and the state sent to Jev",
+		"/jev-content-guard on | off    enable or disable checks for this session",
 	].join("\n");
 }
 
@@ -401,7 +401,7 @@ function showStatus(ctx: ExtensionCommandContext, state: CommandState): void {
 	const connection = resolveConnection(settings, uniqueDirs([ctx.cwd]));
 
 	const lines = [
-		`jev-guard: ${state.isEnabled() && settings.enabled ? "on" : "off"}`,
+		`jev-content-guard: ${state.isEnabled() && settings.enabled ? "on" : "off"}`,
 		config ? `config: ${config.file} — ${ruleCount(config)} rule(s)` : "config: none",
 		`endpoint: ${connection.endpoint}`,
 		`model: ${connection.model}`,
@@ -415,7 +415,7 @@ function showStatus(ctx: ExtensionCommandContext, state: CommandState): void {
 function initConfig(ctx: ExtensionCommandContext): void {
 	const target = path.join(ctx.cwd, CONFIG_NAME);
 	if (fs.existsSync(target)) {
-		ctx.ui.notify(`jev-guard: ${target} already exists`, "warning");
+		ctx.ui.notify(`jev-content-guard: ${target} already exists`, "warning");
 		return;
 	}
 
@@ -443,16 +443,16 @@ function initConfig(ctx: ExtensionCommandContext): void {
 	try {
 		fs.writeFileSync(target, `${JSON.stringify(starter, null, 2)}\n`, "utf8");
 	} catch (error) {
-		ctx.ui.notify(`jev-guard: could not write ${target}: ${message(error)}`, "error");
+		ctx.ui.notify(`jev-content-guard: could not write ${target}: ${message(error)}`, "error");
 		return;
 	}
-	ctx.ui.notify(`jev-guard: wrote ${target}. Edit the rules, then run /jev-guard check <file>.`, "info");
+	ctx.ui.notify(`jev-content-guard: wrote ${target}. Edit the rules, then run /jev-content-guard check <file>.`, "info");
 }
 
 async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> {
 	const target = arg.trim();
 	if (target.length === 0) {
-		ctx.ui.notify("usage: /jev-guard check <file>", "warning");
+		ctx.ui.notify("usage: /jev-content-guard check <file>", "warning");
 		return;
 	}
 
@@ -463,23 +463,23 @@ async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> 
 		if (!fs.statSync(absPath).isFile()) throw new Error("not a file");
 		content = fs.readFileSync(absPath, "utf8");
 	} catch (error) {
-		ctx.ui.notify(`jev-guard: cannot read ${absPath}: ${message(error)}`, "error");
+		ctx.ui.notify(`jev-content-guard: cannot read ${absPath}: ${message(error)}`, "error");
 		return;
 	}
 
 	const config = loadConfig<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), (warning) =>
-		ctx.ui.notify(`jev-guard: ${warning}`, "warning"),
+		ctx.ui.notify(`jev-content-guard: ${warning}`, "warning"),
 	);
 	const settings = resolveSettings(config);
 	if (isIgnored(config, absPath)) {
-		ctx.ui.notify(`jev-guard: ${display} is ignored by ${CONFIG_NAME}`, "info");
+		ctx.ui.notify(`jev-content-guard: ${display} is ignored by ${CONFIG_NAME}`, "info");
 		return;
 	}
 
 	const matched = matchRules(config, absPath);
 	const checks = collectChecks(matched, settings.minProbability);
 	if (checks.length === 0) {
-		ctx.ui.notify(`jev-guard: no rules match ${display}`, "warning");
+		ctx.ui.notify(`jev-content-guard: no rules match ${display}`, "warning");
 		return;
 	}
 
@@ -488,7 +488,7 @@ async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> 
 	const contexts = mergedContexts(settings, matched);
 	const connection = resolveConnection(settings, uniqueDirs([path.dirname(absPath), ctx.cwd]));
 	if (!connection.credential) {
-		ctx.ui.notify(`jev-guard: ${connection.error ?? "no API key"}`, "error");
+		ctx.ui.notify(`jev-content-guard: ${connection.error ?? "no API key"}`, "error");
 		return;
 	}
 
@@ -510,7 +510,7 @@ async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> 
 	}
 
 	if (!outcome.ok) {
-		ctx.ui.notify(`jev-guard: ${outcome.message}`, "error");
+		ctx.ui.notify(`jev-content-guard: ${outcome.message}`, "error");
 		return;
 	}
 
@@ -522,7 +522,7 @@ async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> 
 	});
 	ctx.ui.notify(
 		[
-			`jev-guard check: ${display}`,
+			`jev-content-guard check: ${display}`,
 			`endpoint: ${connection.endpoint}`,
 			`model: ${connection.model}`,
 			"",
@@ -544,12 +544,12 @@ function showContext(arg: string, ctx: ExtensionCommandContext): void {
 	const target = arg.trim();
 	const absPath = target.length > 0 ? path.resolve(ctx.cwd, target) : undefined;
 	if (absPath !== undefined && !isInside(ctx.cwd, absPath)) {
-		ctx.ui.notify(`jev-guard: ${displayPath(absPath, ctx.cwd)} is outside the working directory`, "warning");
+		ctx.ui.notify(`jev-content-guard: ${displayPath(absPath, ctx.cwd)} is outside the working directory`, "warning");
 		return;
 	}
 
 	const display = absPath === undefined ? undefined : displayPath(absPath, ctx.cwd);
-	const warn = (warning: string) => ctx.ui.notify(`jev-guard: ${warning}`, "warning");
+	const warn = (warning: string) => ctx.ui.notify(`jev-content-guard: ${warning}`, "warning");
 	const config =
 		absPath === undefined
 			? loadConfigFromDir<HookConfig>(CONFIG_NAME, ctx.cwd, ctx.cwd, ctx.isProjectTrusted(), warn)
@@ -557,7 +557,7 @@ function showContext(arg: string, ctx: ExtensionCommandContext): void {
 	const settings = resolveSettings(config);
 
 	const lines: string[] = [
-		display === undefined ? "jev-guard context" : `jev-guard context: ${display}`,
+		display === undefined ? "jev-content-guard context" : `jev-content-guard context: ${display}`,
 		config ? `config: ${config.file} — ${ruleCount(config)} rule(s)` : "config: none",
 		`enabled: ${settings.enabled}   includeFileName: ${settings.includeFileName}`,
 		"",

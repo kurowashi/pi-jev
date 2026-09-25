@@ -22,7 +22,7 @@ export interface CommandHandlers {
 }
 
 export interface CommandSpec {
-	/** Command name without the slash, e.g. "jev-guard". */
+	/** Command name without the slash, e.g. "jev-content-guard". */
 	name: string;
 	/** Words after the name in the on/off notifications, e.g. "checks". */
 	switchLabel: string;

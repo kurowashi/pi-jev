@@ -1,5 +1,5 @@
 /**
- * jev-tree-guard — semantic placement checks for newly created files, backed by TypeSafe Jev (System One).
+ * jev-placement-guard — semantic placement checks for newly created files, backed by TypeSafe Jev (System One).
  *
  * Hooks the `write` tool. When the target path does not exist yet, the extension
  * renders the existing project tree (bounded and ignore-aware), attaches the
@@ -7,7 +7,7 @@
  * being added. A failed check blocks the write and returns the rule's `fail`
  * text to the model.
  *
- * The nearest `.jev-tree-guard.json` on the way up to the filesystem root is
+ * The nearest `.jev-placement-guard.json` on the way up to the filesystem root is
  * used, and only inside the trusted working directory.
  */
 
@@ -72,10 +72,10 @@ export { globToRegExp, parseDotEnv, renderTemplate } from "@pi-jev/core";
 // Constants
 // ------------------------------------------------------------------------------------------------
 
-const NAME = "jev-tree-guard";
-const CONFIG_NAME = ".jev-tree-guard.json";
-const STATUS_KEY = "jev-tree-guard";
-const CONTEXT_COMMAND = "/jev-tree-guard context";
+const NAME = "jev-placement-guard";
+const CONFIG_NAME = ".jev-placement-guard.json";
+const STATUS_KEY = "jev-placement-guard";
+const CONTEXT_COMMAND = "/jev-placement-guard context";
 
 /** Messages core renders on this guard's behalf. */
 const FLAVOR: GuardFlavor = {
@@ -161,7 +161,7 @@ export default function jevTreeGuard(pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_call", async (event, ctx): Promise<ToolCallEventResult | undefined> => {
-		if (!sessionEnabled || disabledByEnv("JEV_TREE_GUARD_DISABLE")) return undefined;
+		if (!sessionEnabled || disabledByEnv("JEV_PLACEMENT_GUARD_DISABLE")) return undefined;
 		if (event.toolName !== "write") return undefined;
 
 		const input = event.input as Record<string, unknown>;
@@ -268,8 +268,8 @@ export default function jevTreeGuard(pi: ExtensionAPI): void {
 		);
 	};
 
-	pi.registerCommand("jev-tree-guard", {
-		description: "Show, initialize, or dry-run .jev-tree-guard.json placement checks",
+	pi.registerCommand("jev-placement-guard", {
+		description: "Show, initialize, or dry-run .jev-placement-guard.json placement checks",
 		handler: commandHandler,
 	});
 }
@@ -539,11 +539,11 @@ function describePlacementState(state: ProposedPlacement, includeFileName: boole
 
 function helpText(): string {
 	return [
-		"/jev-tree-guard             show status",
-		"/jev-tree-guard init        write a starter .jev-tree-guard.json in the working directory",
-		"/jev-tree-guard check FILE  check a path as if it were about to be created, without writing it",
-		"/jev-tree-guard context [FILE]  show the merged context and the state sent to Jev",
-		"/jev-tree-guard on | off    enable or disable checks for this session",
+		"/jev-placement-guard             show status",
+		"/jev-placement-guard init        write a starter .jev-placement-guard.json in the working directory",
+		"/jev-placement-guard check FILE  check a path as if it were about to be created, without writing it",
+		"/jev-placement-guard context [FILE]  show the merged context and the state sent to Jev",
+		"/jev-placement-guard on | off    enable or disable checks for this session",
 	].join("\n");
 }
 
@@ -553,7 +553,7 @@ function showStatus(ctx: ExtensionCommandContext, state: CommandState): void {
 	const connection = resolveConnection(settings, uniqueDirs([ctx.cwd]));
 
 	const lines = [
-		`jev-tree-guard: ${state.isEnabled() && settings.enabled ? "on" : "off"}`,
+		`jev-placement-guard: ${state.isEnabled() && settings.enabled ? "on" : "off"}`,
 		config ? `config: ${config.file} — ${ruleCount(config)} rule(s)` : "config: none",
 		`endpoint: ${connection.endpoint}`,
 		`model: ${connection.model}`,
@@ -570,7 +570,7 @@ function showStatus(ctx: ExtensionCommandContext, state: CommandState): void {
 function initConfig(ctx: ExtensionCommandContext): void {
 	const target = path.join(ctx.cwd, CONFIG_NAME);
 	if (fs.existsSync(target)) {
-		ctx.ui.notify(`jev-tree-guard: ${target} already exists`, "warning");
+		ctx.ui.notify(`jev-placement-guard: ${target} already exists`, "warning");
 		return;
 	}
 
@@ -611,23 +611,23 @@ function initConfig(ctx: ExtensionCommandContext): void {
 	try {
 		fs.writeFileSync(target, `${JSON.stringify(starter, null, 2)}\n`, "utf8");
 	} catch (error) {
-		ctx.ui.notify(`jev-tree-guard: could not write ${target}: ${message(error)}`, "error");
+		ctx.ui.notify(`jev-placement-guard: could not write ${target}: ${message(error)}`, "error");
 		return;
 	}
-	ctx.ui.notify(`jev-tree-guard: wrote ${target}. Edit the rules, then run /jev-tree-guard check <file>.`, "info");
+	ctx.ui.notify(`jev-placement-guard: wrote ${target}. Edit the rules, then run /jev-placement-guard check <file>.`, "info");
 }
 
 async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> {
 	const target = arg.trim();
 	if (target.length === 0) {
-		ctx.ui.notify("usage: /jev-tree-guard check <file>", "warning");
+		ctx.ui.notify("usage: /jev-placement-guard check <file>", "warning");
 		return;
 	}
 
 	const absPath = path.resolve(ctx.cwd, target);
 	const display = displayPath(absPath, ctx.cwd);
 	if (!isInside(ctx.cwd, absPath)) {
-		ctx.ui.notify(`jev-tree-guard: ${display} is outside the working directory`, "warning");
+		ctx.ui.notify(`jev-placement-guard: ${display} is outside the working directory`, "warning");
 		return;
 	}
 
@@ -641,18 +641,18 @@ async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> 
 	}
 
 	const config = loadConfig<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), (warning) =>
-		ctx.ui.notify(`jev-tree-guard: ${warning}`, "warning"),
+		ctx.ui.notify(`jev-placement-guard: ${warning}`, "warning"),
 	);
 	const settings = resolveSettings(config);
 	if (isIgnored(config, absPath)) {
-		ctx.ui.notify(`jev-tree-guard: ${display} is ignored by ${CONFIG_NAME}`, "info");
+		ctx.ui.notify(`jev-placement-guard: ${display} is ignored by ${CONFIG_NAME}`, "info");
 		return;
 	}
 
 	const matched = matchRules(config, absPath, { matchAllWhenNoFiles: true });
 	const checks = collectChecks(matched, settings.minProbability);
 	if (checks.length === 0) {
-		ctx.ui.notify(`jev-tree-guard: no rules match ${display}`, "warning");
+		ctx.ui.notify(`jev-placement-guard: no rules match ${display}`, "warning");
 		return;
 	}
 
@@ -669,7 +669,7 @@ async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> 
 
 	const connection = resolveConnection(settings, uniqueDirs([path.dirname(absPath), ctx.cwd]));
 	if (!connection.credential) {
-		ctx.ui.notify(`jev-tree-guard: ${connection.error ?? "no API key"}`, "error");
+		ctx.ui.notify(`jev-placement-guard: ${connection.error ?? "no API key"}`, "error");
 		return;
 	}
 
@@ -691,7 +691,7 @@ async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> 
 	}
 
 	if (!outcome.ok) {
-		ctx.ui.notify(`jev-tree-guard: ${outcome.message}`, "error");
+		ctx.ui.notify(`jev-placement-guard: ${outcome.message}`, "error");
 		return;
 	}
 
@@ -703,7 +703,7 @@ async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> 
 	});
 	ctx.ui.notify(
 		[
-			`jev-tree-guard check: ${display}${content === undefined ? " (not created yet)" : ""}`,
+			`jev-placement-guard check: ${display}${content === undefined ? " (not created yet)" : ""}`,
 			`endpoint: ${connection.endpoint}`,
 			`model: ${connection.model}`,
 			treeSummary(proposed),
@@ -726,12 +726,12 @@ function showContext(arg: string, ctx: ExtensionCommandContext): void {
 	const target = arg.trim();
 	const absPath = target.length > 0 ? path.resolve(ctx.cwd, target) : undefined;
 	if (absPath !== undefined && !isInside(ctx.cwd, absPath)) {
-		ctx.ui.notify(`jev-tree-guard: ${displayPath(absPath, ctx.cwd)} is outside the working directory`, "warning");
+		ctx.ui.notify(`jev-placement-guard: ${displayPath(absPath, ctx.cwd)} is outside the working directory`, "warning");
 		return;
 	}
 
 	const display = absPath === undefined ? undefined : displayPath(absPath, ctx.cwd);
-	const warn = (warning: string) => ctx.ui.notify(`jev-tree-guard: ${warning}`, "warning");
+	const warn = (warning: string) => ctx.ui.notify(`jev-placement-guard: ${warning}`, "warning");
 	const config =
 		absPath === undefined
 			? loadConfigFromDir<HookConfig>(CONFIG_NAME, ctx.cwd, ctx.cwd, ctx.isProjectTrusted(), warn)
@@ -739,7 +739,7 @@ function showContext(arg: string, ctx: ExtensionCommandContext): void {
 	const settings = resolveSettings(config);
 
 	const lines: string[] = [
-		display === undefined ? "jev-tree-guard context" : `jev-tree-guard context: ${display}`,
+		display === undefined ? "jev-placement-guard context" : `jev-placement-guard context: ${display}`,
 		config ? `config: ${config.file} — ${ruleCount(config)} rule(s)` : "config: none",
 		`enabled: ${settings.enabled}   onlyNewFiles: ${settings.onlyNewFiles}   includeFileName: ${settings.includeFileName}`,
 		"",

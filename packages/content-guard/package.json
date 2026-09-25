@@ -1,5 +1,5 @@
 {
-	"name": "pi-jev-guard",
+	"name": "pi-jev-content-guard",
 	"version": "0.2.0",
 	"description": "Semantic file-edit checks with TypeSafe Jev (System One) for Pi",
 	"keywords": [

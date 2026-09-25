@@ -7,8 +7,8 @@ TypeSafe Jev（System One）で Pi のファイル操作を意味的にチェッ
 
 | パッケージ | Pi 拡張 | 役割 | 設定ファイル |
 |---|---|---|---|
-| [`packages/guard`](packages/guard) | `pi-jev-guard` | `edit` / `write` の内容をチェック | `.jev-guard.json` |
-| [`packages/tree-guard`](packages/tree-guard) | `pi-jev-tree-guard` | 新規 `write` の配置をチェック | `.jev-tree-guard.json` |
+| [`packages/content-guard`](packages/content-guard) | `pi-jev-content-guard` | `edit` / `write` の内容をチェック | `.jev-content-guard.json` |
+| [`packages/placement-guard`](packages/placement-guard) | `pi-jev-placement-guard` | 新規 `write` の配置をチェック | `.jev-placement-guard.json` |
 | [`packages/core`](packages/core) | （拡張ではない） | 共有する配管（config 探索・glob・ルール・認証・Jev 呼び出し・失敗整形） | — |
 
 ## セットアップ
@@ -21,8 +21,8 @@ npm test      # 全パッケージのテスト
 ## インストール（Pi）
 
 ```bash
-pi install /path/to/pi-jev/packages/guard
-pi install /path/to/pi-jev/packages/tree-guard
+pi install /path/to/pi-jev/packages/content-guard
+pi install /path/to/pi-jev/packages/placement-guard
 ```
 
 使い方は各パッケージの README を参照してください。

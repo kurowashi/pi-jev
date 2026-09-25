@@ -4,7 +4,7 @@
   "onError": "allow",
   "onlyNewFiles": true,
   "includeContent": true,
-  "context": "This repository is a Pi plugin monorepo built with npm workspaces. Shared plumbing lives in packages/core/src/, the guard plugins in packages/guard/src/ and packages/tree-guard/src/, their tests in packages/<name>/test/, and documentation in the repository root.",
+  "context": "This repository is a Pi plugin monorepo built with npm workspaces. Shared plumbing lives in packages/core/src/, the guard plugins in packages/content-guard/src/ and packages/placement-guard/src/, their tests in packages/<name>/test/, and documentation in the repository root.",
   "rules": [
     {
       "name": "Placement",

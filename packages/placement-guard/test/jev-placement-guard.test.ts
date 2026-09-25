@@ -73,7 +73,7 @@ function fakeContext(cwd: string, trusted = true): FakeContext {
 }
 
 function makeProject(files: Record<string, string>): string {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "jev-tree-guard-"));
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "jev-placement-guard-"));
 	for (const [name, content] of Object.entries(files)) {
 		const target = path.join(root, name);
 		fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -133,7 +133,7 @@ const CLEAN_ENV = {
 	OPENCODE_ZEN_API_KEY: undefined,
 	COMMANDCODE_API_KEY: undefined,
 	SYSTEMONE_ENDPOINT: undefined,
-	JEV_TREE_GUARD_DISABLE: undefined,
+	JEV_PLACEMENT_GUARD_DISABLE: undefined,
 };
 
 // ------------------------------------------------------------------------------------------------
@@ -248,7 +248,7 @@ test("renderTree excludes an existing file when dry-running it as new", () => {
 
 test("blocks the creation of a misplaced new file", async () => {
 	const root = makeProject({
-		".jev-tree-guard.json": JSON.stringify({
+		".jev-placement-guard.json": JSON.stringify({
 			rules: [
 				{
 					name: "Placement",
@@ -303,7 +303,7 @@ test("blocks the creation of a misplaced new file", async () => {
 
 test("allows the creation when every check passes", async () => {
 	const root = makeProject({
-		".jev-tree-guard.json": JSON.stringify({ rules: [{ files: ["**/*.ts"], checks: ["Fits"] }] }),
+		".jev-placement-guard.json": JSON.stringify({ rules: [{ files: ["**/*.ts"], checks: ["Fits"] }] }),
 		"src/index.ts": "",
 	});
 	const { toolCall } = harness();
@@ -319,7 +319,7 @@ test("allows the creation when every check passes", async () => {
 
 test("does not check overwrites of existing files by default", async () => {
 	const root = makeProject({
-		".jev-tree-guard.json": JSON.stringify({ rules: [{ files: ["**/*.ts"], checks: ["Fits"] }] }),
+		".jev-placement-guard.json": JSON.stringify({ rules: [{ files: ["**/*.ts"], checks: ["Fits"] }] }),
 		"src/a.ts": "old\n",
 	});
 	const { toolCall } = harness();
@@ -343,7 +343,7 @@ test("does not check overwrites of existing files by default", async () => {
 
 test("checks overwrites when onlyNewFiles is false", async () => {
 	const root = makeProject({
-		".jev-tree-guard.json": JSON.stringify({
+		".jev-placement-guard.json": JSON.stringify({
 			onlyNewFiles: false,
 			rules: [{ files: ["**/*.ts"], checks: ["Fits"] }],
 		}),
@@ -372,7 +372,7 @@ test("checks overwrites when onlyNewFiles is false", async () => {
 
 test("a rule without files matches every new file", async () => {
 	const root = makeProject({
-		".jev-tree-guard.json": JSON.stringify({ rules: [{ name: "Any", checks: ["Fits"] }] }),
+		".jev-placement-guard.json": JSON.stringify({ rules: [{ name: "Any", checks: ["Fits"] }] }),
 	});
 	const { toolCall } = harness();
 	let called = false;
@@ -393,7 +393,7 @@ test("a rule without files matches every new file", async () => {
 
 test("does not check files that no rule matches", async () => {
 	const root = makeProject({
-		".jev-tree-guard.json": JSON.stringify({ rules: [{ files: ["**/*.py"], checks: ["Fits"] }] }),
+		".jev-placement-guard.json": JSON.stringify({ rules: [{ files: ["**/*.py"], checks: ["Fits"] }] }),
 	});
 	const { toolCall } = harness();
 	let called = false;
@@ -417,7 +417,7 @@ test("tells Jev when the tree was cut off", async () => {
 	const files: Record<string, string> = {};
 	for (let i = 0; i < 6; i++) files[`d${i}/file.ts`] = "";
 	const root = makeProject({
-		".jev-tree-guard.json": JSON.stringify({
+		".jev-placement-guard.json": JSON.stringify({
 			maxTreeEntries: 3,
 			rules: [{ files: ["**/*.ts"], checks: ["Fits"] }],
 		}),
@@ -443,7 +443,7 @@ test("tells Jev when the tree was cut off", async () => {
 
 test("ignore prevents checks entirely", async () => {
 	const root = makeProject({
-		".jev-tree-guard.json": JSON.stringify({
+		".jev-placement-guard.json": JSON.stringify({
 			ignore: ["**/vendor/**"],
 			rules: [{ files: ["**/*"], checks: ["Fits"] }],
 		}),
@@ -468,7 +468,7 @@ test("ignore prevents checks entirely", async () => {
 
 test("negate asks for the failure mode and inverts its probability", async () => {
 	const root = makeProject({
-		".jev-tree-guard.json": JSON.stringify({
+		".jev-placement-guard.json": JSON.stringify({
 			rules: [
 				{
 					name: "Placement",
@@ -503,16 +503,16 @@ test("negate asks for the failure mode and inverts its probability", async () =>
 	assert.match(block.reason, /Misplaced in an unrelated directory \(negated, satisfied 10%\)/);
 });
 
-test("/jev-tree-guard check treats an existing file as a proposal", async () => {
+test("/jev-placement-guard check treats an existing file as a proposal", async () => {
 	const root = makeProject({
-		".jev-tree-guard.json": JSON.stringify({
+		".jev-placement-guard.json": JSON.stringify({
 			rules: [{ files: ["**/*.ts"], checks: ["Fits"] }],
 		}),
 		"src/a.ts": "export {};\n",
 	});
 	const { commands } = harness();
 	const ctx = fakeContext(root);
-	const handler = commands.get("jev-tree-guard");
+	const handler = commands.get("jev-placement-guard");
 	assert.ok(handler);
 
 	await withEnv(CLEAN_ENV, () =>
@@ -533,15 +533,15 @@ test("/jev-tree-guard check treats an existing file as a proposal", async () => 
 	);
 
 	const report = ctx.notifications.at(-1)?.message ?? "";
-	assert.match(report, /jev-tree-guard check: src\/a\.ts/);
+	assert.match(report, /jev-placement-guard check: src\/a\.ts/);
 	assert.match(report, /PASS\s+90%/);
 	assert.match(report, /state sent to Jev:/);
 	assert.match(report, /file: src\/a\.ts \(new\)/);
 });
 
-test("/jev-tree-guard merges all matching rules into one request with their contexts", async () => {
+test("/jev-placement-guard merges all matching rules into one request with their contexts", async () => {
 	const root = makeProject({
-		".jev-tree-guard.json": JSON.stringify({
+		".jev-placement-guard.json": JSON.stringify({
 			context: "top context",
 			rules: [
 				{ name: "Placement", files: "**/*.ts", context: "placement context", checks: ["Fits"] },
@@ -575,9 +575,9 @@ test("/jev-tree-guard merges all matching rules into one request with their cont
 	assert.deepEqual(Object.keys(bodies[0]!.questions), ["check_0", "check_1"]);
 });
 
-test("/jev-tree-guard context shows the merged request without calling Jev", async () => {
+test("/jev-placement-guard context shows the merged request without calling Jev", async () => {
 	const root = makeProject({
-		".jev-tree-guard.json": JSON.stringify({
+		".jev-placement-guard.json": JSON.stringify({
 			context: "Global tree convention.",
 			rules: [
 				{ name: "App", files: ["src/**/*.ts"], context: "App rule context.", checks: ["Fits"] },
@@ -588,15 +588,15 @@ test("/jev-tree-guard context shows the merged request without calling Jev", asy
 	});
 	const { commands } = harness();
 	const ctx = fakeContext(root);
-	const handler = commands.get("jev-tree-guard");
+	const handler = commands.get("jev-placement-guard");
 	assert.ok(handler);
 
 	await withEnv(CLEAN_ENV, () => handler("context src/a.ts", ctx));
 
 	const report = ctx.notifications.at(-1)?.message ?? "";
-	assert.match(report, /jev-tree-guard context: src\/a\.ts/);
-	assert.match(report, /config: .*\.jev-tree-guard\.json — 2 rule\(s\)/);
-	assert.match(report, /context \(from .*\.jev-tree-guard\.json\)/);
+	assert.match(report, /jev-placement-guard context: src\/a\.ts/);
+	assert.match(report, /config: .*\.jev-placement-guard\.json — 2 rule\(s\)/);
+	assert.match(report, /context \(from .*\.jev-placement-guard\.json\)/);
 	assert.match(report, /Global tree convention\./);
 	assert.match(report, /rules merged into one request: 1 — App/);
 	assert.match(report, /merged context \(2 part\(s\)\):/);
@@ -606,19 +606,19 @@ test("/jev-tree-guard context shows the merged request without calling Jev", asy
 	assert.match(report, /^file: src\/a\.ts \(new\)$/m);
 });
 
-test("/jev-tree-guard context without a file lists the adopted context", async () => {
+test("/jev-placement-guard context without a file lists the adopted context", async () => {
 	const root = makeProject({
-		".jev-tree-guard.json": JSON.stringify({ context: "Only top.", rules: [] }),
+		".jev-placement-guard.json": JSON.stringify({ context: "Only top.", rules: [] }),
 	});
 	const { commands } = harness();
 	const ctx = fakeContext(root);
-	const handler = commands.get("jev-tree-guard");
+	const handler = commands.get("jev-placement-guard");
 	assert.ok(handler);
 
 	await withEnv(CLEAN_ENV, () => handler("context", ctx));
 
 	const report = ctx.notifications.at(-1)?.message ?? "";
-	assert.match(report, /jev-tree-guard context\b/);
+	assert.match(report, /jev-placement-guard context\b/);
 	assert.match(report, /Only top\./);
 	assert.match(report, /Rules need a target file/);
 });
