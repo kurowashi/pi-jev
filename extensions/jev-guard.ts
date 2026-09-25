@@ -31,6 +31,7 @@ const CONFIG_NAME = ".jev-guard.json";
 const AGENT_DIR = nonEmpty(process.env.PI_CODING_AGENT_DIR) ?? path.join(os.homedir(), ".pi", "agent");
 const GLOBAL_CONFIG_PATH = path.join(AGENT_DIR, CONFIG_NAME);
 const STATUS_KEY = "jev-guard";
+const CONTEXT_COMMAND = "/jev-guard context";
 
 const DEFAULT_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 const DEFAULT_MODEL = "jev-1.13.0";
@@ -158,7 +159,6 @@ type ProposedContent = {
 	content?: string;
 	change?: string;
 	note?: string;
-	context?: string;
 };
 
 type JevOutcome =
@@ -200,16 +200,9 @@ export default function jevHooks(pi: ExtensionAPI): void {
 		if (checks.length === 0) return undefined;
 
 		const scope = settings.scope ?? (event.toolName === "write" ? "file" : "change");
-		const proposed = buildProposedContent(
-			event.toolName,
-			absPath,
-			input,
-			ctx.cwd,
-			scope,
-			settings.maxFileChars,
-			withFileName(display, settings.context, settings.includeFileName),
-		);
+		const proposed = buildProposedContent(event.toolName, absPath, input, ctx.cwd, scope, settings.maxFileChars);
 		if (!proposed) return undefined;
+		const contexts = mergedContexts(settings, matched);
 
 		const connection = resolveConnection(settings, uniqueDirs([path.dirname(absPath), ctx.cwd]));
 		if (!connection.credential) {
@@ -223,7 +216,9 @@ export default function jevHooks(pi: ExtensionAPI): void {
 				endpoint: connection.endpoint,
 				model: connection.model,
 				apiKey: connection.credential.value,
-				state: proposed,
+				proposed,
+				contexts,
+				includeFileName: settings.includeFileName,
 				checks,
 				timeoutMs: settings.timeoutMs,
 			});
@@ -507,21 +502,42 @@ function collectChecks(matched: MatchedRule[], fallback: number): PendingCheck[]
 	return checks;
 }
 
-/** Prefixes the context with the target file name so Jev can take the path into account. */
-function withFileName(file: string, context: string | undefined, include: boolean): string | undefined {
-	if (!include) return context;
-	const line = `Target file: ${file}`;
-	return context ? `${line}\n\n${context}` : line;
+/** All context text for the merged request: the global context first, then each rule's own. */
+function mergedContexts(settings: ResolvedSettings, matched: MatchedRule[]): string[] {
+	const parts: string[] = [];
+	if (settings.context) parts.push(settings.context);
+	for (const rule of matched) {
+		const value = typeof rule.rule.context === "string" ? rule.rule.context.trim() : "";
+		if (value.length > 0 && !parts.includes(value)) parts.push(value);
+	}
+	return parts;
 }
 
-/** Global context plus the rule's own context; one blob is one rule. */
-function blobContext(base: string | undefined, rule: MatchedRule): string | undefined {
-	const parts: string[] = [];
-	if (base) parts.push(base);
-	if (typeof rule.rule.context === "string" && rule.rule.context.trim().length > 0) {
-		parts.push(rule.rule.context.trim());
+/**
+ * Formats the Jev state as one document: the merged context, the
+ * project-relative path, the proposed content, and the diff.
+ */
+function buildStateDocument(
+	proposed: ProposedContent,
+	contexts: string[],
+	includeFileName: boolean,
+): string {
+	const sections: string[] = [];
+	if (contexts.length > 0) sections.push(contexts.join("\n\n"));
+	const fileLine = includeFileName ? `file: ${proposed.file}` : undefined;
+	if (fileLine !== undefined && proposed.content !== undefined) {
+		sections.push(`${fileLine}\n${fenced(proposed.content)}`);
+	} else {
+		if (fileLine !== undefined) sections.push(fileLine);
+		if (proposed.content !== undefined) sections.push(fenced(proposed.content));
 	}
-	return parts.length > 0 ? parts.join("\n\n") : undefined;
+	if (proposed.change !== undefined) sections.push(`file edit\n${fenced(proposed.change, "diff")}`);
+	if (proposed.note) sections.push(`note: ${proposed.note}`);
+	return sections.join("\n\n");
+}
+
+function fenced(text: string, language = ""): string {
+	return `\`\`\`${language}\n${text.replace(/\n+$/, "")}\n\`\`\``;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -535,14 +551,13 @@ function buildProposedContent(
 	cwd: string,
 	scope: Scope,
 	maxFileChars: number,
-	context: string | undefined,
 ): ProposedContent | undefined {
 	const file = displayPath(absPath, cwd);
 
 	if (toolName === "write") {
 		if (typeof input.content !== "string") return undefined;
 		const limited = limitText(input.content, maxFileChars);
-		return { file, scope: "file", content: limited.text, note: limited.note, context };
+		return { file, scope: "file", content: limited.text, note: limited.note };
 	}
 
 	const edits = Array.isArray(input.edits) ? input.edits : [];
@@ -552,18 +567,17 @@ function buildProposedContent(
 	if (predicted !== undefined && scope !== "change") {
 		const limited = limitText(predicted, maxFileChars);
 		if (scope === "both" && change) {
-			return { file, scope: "both", content: limited.text, change, note: limited.note, context };
+			return { file, scope: "both", content: limited.text, change, note: limited.note };
 		}
 		if (scope === "file" && predicted.length > maxFileChars && change) {
 			return {
 				file,
 				scope: "change",
 				change,
-				context,
 				note: "The full file is larger than maxFileChars; only the edited blocks are shown.",
 			};
 		}
-		return { file, scope: "file", content: limited.text, note: limited.note, context };
+		return { file, scope: "file", content: limited.text, note: limited.note };
 	}
 
 	if (!change) return undefined;
@@ -571,7 +585,6 @@ function buildProposedContent(
 		file,
 		scope: "change",
 		change,
-		context,
 		note:
 			scope === "change"
 				? undefined
@@ -662,39 +675,16 @@ interface JevRequest {
 	endpoint: string;
 	model: string;
 	apiKey: string;
-	state: ProposedContent;
+	proposed: ProposedContent;
+	contexts: string[];
+	includeFileName: boolean;
 	checks: PendingCheck[];
 	timeoutMs: number;
 }
 
-/** One Jev request per matched rule: each rule is a blob with its own context. */
+/** One request per tool call: every matching rule's checks and context are merged. */
 async function callJev(request: JevRequest): Promise<JevOutcome> {
-	const groups = new Map<MatchedRule, PendingCheck[]>();
-	for (const check of request.checks) {
-		const list = groups.get(check.rule);
-		if (list) list.push(check);
-		else groups.set(check.rule, [check]);
-	}
-
-	const outcomes = await Promise.all(
-		[...groups].map(([rule, checks]) =>
-			callJevBlob({
-				...request,
-				checks,
-				state: { ...request.state, context: blobContext(request.state.context, rule) },
-			}),
-		),
-	);
-
-	const probabilities = new Map<string, number>();
-	for (const outcome of outcomes) {
-		if (!outcome.ok) return outcome;
-		for (const [name, value] of outcome.probabilities) probabilities.set(name, value);
-	}
-	return { ok: true, probabilities };
-}
-
-async function callJevBlob(request: JevRequest): Promise<JevOutcome> {
+	const state = buildStateDocument(request.proposed, request.contexts, request.includeFileName);
 	const questions: Record<string, unknown> = {};
 	for (const check of request.checks) {
 		const ask = check.negate
@@ -702,7 +692,7 @@ async function callJevBlob(request: JevRequest): Promise<JevOutcome> {
 			: `Answer yes if the new content satisfies this requirement: ${check.text}`;
 		questions[check.name] = {
 			type: "noul",
-			instructions: `The state contains ${describeState(request.state)}. ${ask}`,
+			instructions: `The state contains ${describeState(request.proposed, request.includeFileName)}. ${ask}`,
 			criteria: check.negate
 				? { true: "The statement describes the new content.", false: "The statement does not describe the new content." }
 				: { true: "The requirement is satisfied.", false: "The requirement is violated." },
@@ -717,7 +707,7 @@ async function callJevBlob(request: JevRequest): Promise<JevOutcome> {
 				"content-type": "application/json",
 				authorization: `Bearer ${request.apiKey}`,
 			},
-			body: JSON.stringify({ model: request.model, state: request.state, questions }),
+			body: JSON.stringify({ model: request.model, state, questions }),
 			signal: AbortSignal.timeout(request.timeoutMs),
 		});
 	} catch (error) {
@@ -751,11 +741,12 @@ async function callJevBlob(request: JevRequest): Promise<JevOutcome> {
 	return { ok: true, probabilities };
 }
 
-function describeState(state: unknown): string {
-	const scope = state && typeof state === "object" ? (state as { scope?: unknown }).scope : undefined;
-	if (scope === "change") return "a proposed change to a file";
-	if (scope === "both") return "a file's complete proposed content and the edited blocks it changes";
-	return "a file's complete proposed content";
+function describeState(state: ProposedContent, includeFileName: boolean): string {
+	const parts: string[] = [];
+	if (includeFileName) parts.push("the target file path");
+	if (state.content !== undefined) parts.push("the file's complete proposed content");
+	if (state.change !== undefined) parts.push("the diff of the edited blocks");
+	return parts.length > 0 ? parts.join(", ") : "the proposed content";
 }
 
 function describeFetchError(error: unknown, timeoutMs: number): string {
@@ -940,7 +931,7 @@ function buildFailureReason(
 			blocks.push(
 				renderTemplate(template, {
 					file,
-					rule: rule.rule.name ?? path.basename(rule.config.file),
+					rule: ruleLabel(rule),
 					checks: details,
 					details,
 					probability: percent(
@@ -991,6 +982,9 @@ async function handleCommand(args: string, ctx: ExtensionCommandContext, state: 
 		case "check":
 			await dryRun(rest.join(" "), ctx);
 			return;
+		case "context":
+			showContext(rest.join(" "), ctx);
+			return;
 		case "on":
 			state.setEnabled(true);
 			ctx.ui.notify("jev-guard: checks enabled", "info");
@@ -1009,6 +1003,7 @@ function helpText(): string {
 		"/jev-guard             show status",
 		"/jev-guard init        write a starter .jev-guard.json in the working directory",
 		"/jev-guard check FILE  run the matching checks against FILE without editing it",
+		"/jev-guard context [FILE]  show the merged context and the state sent to Jev",
 		"/jev-guard on | off    enable or disable checks for this session",
 	].join("\n");
 }
@@ -1104,13 +1099,7 @@ async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> 
 	}
 
 	const limited = limitText(content, settings.maxFileChars);
-	const proposed: ProposedContent = {
-		file: display,
-		scope: "file",
-		content: limited.text,
-		note: limited.note,
-		context: withFileName(display, settings.context, settings.includeFileName),
-	};
+	const proposed: ProposedContent = { file: display, scope: "file", content: limited.text, note: limited.note };
 	const connection = resolveConnection(settings, uniqueDirs([path.dirname(absPath), ctx.cwd]));
 	if (!connection.credential) {
 		ctx.ui.notify(`jev-guard: ${connection.error ?? "no API key"}`, "error");
@@ -1124,7 +1113,9 @@ async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> 
 			endpoint: connection.endpoint,
 			model: connection.model,
 			apiKey: connection.credential.value,
-			state: proposed,
+			proposed,
+			contexts: mergedContexts(settings, matched),
+			includeFileName: settings.includeFileName,
 			checks,
 			timeoutMs: settings.timeoutMs,
 		});
@@ -1150,9 +1141,124 @@ async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> 
 			`model: ${connection.model}`,
 			"",
 			...lines,
+			"",
+			"state sent to Jev:",
+			...displayBlock(
+				clippedText(buildStateDocument(proposed, mergedContexts(settings, matched), settings.includeFileName)),
+			),
 		].join("\n"),
 		"info",
 	);
+}
+
+/**
+ * Shows the context and the exact state document a check would send to Jev,
+ * without calling Jev. With a file it resolves the merged request; without a
+ * file it shows the global context of each config.
+ */
+function showContext(arg: string, ctx: ExtensionCommandContext): void {
+	const target = arg.trim();
+	const absPath = target.length > 0 ? path.resolve(ctx.cwd, target) : undefined;
+	if (absPath !== undefined && !isInside(ctx.cwd, absPath)) {
+		ctx.ui.notify(`jev-guard: ${displayPath(absPath, ctx.cwd)} is outside the working directory`, "warning");
+		return;
+	}
+
+	const display = absPath === undefined ? undefined : displayPath(absPath, ctx.cwd);
+	const warn = (warning: string) => ctx.ui.notify(`jev-guard: ${warning}`, "warning");
+	const chain =
+		absPath === undefined
+			? loadConfigChainFromDir(ctx.cwd, ctx.cwd, ctx.isProjectTrusted(), warn)
+			: loadConfigChain(absPath, ctx.cwd, ctx.isProjectTrusted(), warn);
+	const settings = resolveSettings(chain);
+	const ruleCount = (entry: LoadedConfig) => (Array.isArray(entry.config.rules) ? entry.config.rules.length : 0);
+
+	const lines: string[] = [
+		display === undefined ? "jev-guard context" : `jev-guard context: ${display}`,
+		`configs: ${chain.length === 0 ? "none" : ""}`.trimEnd(),
+		...chain.map((entry) => `  ${entry.file} — ${ruleCount(entry)} rule(s)`),
+		`enabled: ${settings.enabled}   includeFileName: ${settings.includeFileName}`,
+		"",
+		...globalContextLines(chain),
+	];
+
+	if (display === undefined || absPath === undefined) {
+		lines.push("", `Rules need a target file: run ${CONTEXT_COMMAND} <file> to see the merged request state.`);
+	} else {
+		lines.push(
+			`file line: ${settings.includeFileName ? `file: ${display}` : "(disabled by includeFileName: false)"}`,
+			"",
+		);
+		if (isIgnored(chain, absPath)) {
+			lines.push(`ignored by ${CONFIG_NAME}: no Jev request is sent for this file.`);
+		} else {
+			const sending = matchRules(chain, absPath).filter(
+				(rule) => normalizeChecks(rule.rule, settings.minProbability).length > 0,
+			);
+			if (sending.length === 0) {
+				lines.push("no checks apply to this file: no Jev request is sent.");
+			} else {
+				const contexts = mergedContexts(settings, sending);
+				lines.push(
+					`rules merged into one request: ${sending.length} — ${sending.map((rule) => ruleLabel(rule)).join(", ")}`,
+				);
+				if (contexts.length === 0) {
+					lines.push("merged context: (none)");
+				} else {
+					lines.push(`merged context (${contexts.length} part(s)):`, ...displayBlock(contexts.join("\n\n")));
+				}
+
+				let proposed: ProposedContent = { file: display, scope: "file" };
+				try {
+					if (fs.statSync(absPath).isFile()) {
+						const limited = limitText(fs.readFileSync(absPath, "utf8"), settings.maxFileChars);
+						proposed = { file: display, scope: "file", content: limited.text, note: limited.note };
+					}
+				} catch {
+					// The file does not exist yet: show the request without content.
+				}
+				lines.push(
+					"",
+					"state sent to Jev (whole file; an edit request follows `scope`):",
+					...displayBlock(buildStateDocument(proposed, contexts, settings.includeFileName)),
+				);
+			}
+		}
+	}
+
+	ctx.ui.notify(lines.join("\n"), "info");
+}
+
+/** Global context values from the chain, marking the first (effective) one. */
+function globalContextLines(chain: LoadedConfig[]): string[] {
+	const sources = chain
+		.map((entry) => ({ file: entry.file, value: entry.config.context }))
+		.filter(
+			(entry): entry is { file: string; value: string } =>
+				typeof entry.value === "string" && entry.value.trim().length > 0,
+		);
+	if (sources.length === 0) return ["global context: (none)"];
+	const lines: string[] = [];
+	for (const [index, source] of sources.entries()) {
+		const shadowed = index === 0 ? "" : ` [shadowed by ${sources[0]!.file}]`;
+		lines.push(`global context (from ${source.file})${shadowed}:`, ...displayBlock(source.value.trim()));
+	}
+	return lines;
+}
+
+/** Caps a long state document for command output and points at the full-text command. */
+function clippedText(text: string, max = 2000): string {
+	if (text.length <= max) return text;
+	const omitted = text.length - max;
+	return `${text.slice(0, max)}\n... (${omitted} characters omitted; run ${CONTEXT_COMMAND} <file> for the full state)`;
+}
+
+function displayBlock(text: string): string[] {
+	return ["----", ...text.split(/\r?\n/), "----"];
+}
+
+function ruleLabel(rule: MatchedRule): string {
+	return rule.rule.name ?? path.basename(rule.config.file);
 }
 
 // ------------------------------------------------------------------------------------------------

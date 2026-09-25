@@ -5,6 +5,8 @@
 
 - ファイル名（glob）ごとにチェック内容を指定できる
 - プロジェクトごとの設定ファイル `.jev-guard.json`（AGENTS.md と同じように上位ディレクトリへ探索）
+- マッチした複数ルールの checks と context は1リクエストにマージされる（API アクセスはファイルごとに1回）
+- Jev に実際に送られる context と state を `/jev-guard context <file>` で確認できる
 - チェックを満たさなければツールコールを失敗させ、`fail` に書いた任意の文字列を返す
 
 ## 動作の流れ
@@ -20,10 +22,10 @@ edit / write ツールコール
 ignore（glob）にマッチしたファイルはチェックせずに終了
         │
         ▼
-files（glob）にマッチするルールの checks を集める
+files（glob）にマッチするルールの checks と context を集めて1つにマージ
         │
         ▼
-Jev に yes/no の質問としてまとめて投げる（noul）
+Jev に1リクエストで yes/no の質問としてまとめて投げる（noul）
         │
         ├─ すべて合格 → そのまま編集を実行
         └─ 1つでも不合格 → ツールコールを失敗させ、fail の文字列を返す
@@ -89,7 +91,7 @@ pi -e /path/to/jev-guard/extensions/jev-guard.ts
 | `minProbability` | `0.5` | チェック合格に必要な「yes」の確率 |
 | `onError` | `"allow"` | Jev に接続できない時の挙動。`"block"` で編集を止める |
 | `scope` | 自動 | `"change"`（変更部分）/ `"file"`（ファイル全体）/ `"both"`（ファイル全体+変更部分） |
-| `includeFileName` | `true` | 対象ファイル名を `context` の先頭に `Target file: <path>` として含める |
+| `includeFileName` | `true` | state にプロジェクト相対パスの `file: <path>` 行を含める |
 | `maxFileChars` | `40000` | Jev に送る最大文字数。超えたら変更部分のみに切替 |
 | `timeoutMs` | `20000` | 1回のリクエストのタイムアウト |
 | `fail` | 自動生成 | 失敗時に返す文字列（全ルール共通の既定値） |
@@ -172,9 +174,70 @@ Jev は否定形（「〜していない」）より肯定形のほうが精度�
 | `/jev-guard` | 現在の設定・エンドポイント・キーの状態を表示 |
 | `/jev-guard init` | 作業ディレクトリに `.jev-guard.json` の雛形を作成 |
 | `/jev-guard check <file>` | 編集せずに現在のファイル内容でチェックを実行 |
+| `/jev-guard context [<file>]` | マージされた context と Jev に送られる state を表示（`<file>` 省略時はグローバル分のみ） |
 | `/jev-guard on` / `off` | このセッションでのチェックを有効化 / 無効化 |
 
 `JEV_GUARD_DISABLE=1` で常時無効にもできます。
+
+### `context` と送信 state の確認
+
+Jev へは1リクエストにつき1つの `state`（文字列）を送ります。マッチした複数ルールの checks と `context` は
+**1つのリクエストにマージ**されるため、API アクセスはファイルごとに1回です。state の形式は次のとおりです。
+
+````
+<マージされた context>
+
+file: docs/README.md
+```
+<編集後のファイル全体>
+```
+
+file edit
+```diff
+<変更部分（before/after）>
+```
+````
+
+- `context` はトップレベルの `context` と、マッチした各ルールの `context` を空行で連結したものです（重複は除去）。
+- `file:` はプロジェクト相対パスです（`"includeFileName": false` で無効化）。
+- `file edit` セクションに変更部分（before/after）が入ります。`scope` に応じて、ファイル全体とファイル編集のどちらか、または両方が含まれます。
+
+`/jev-guard context <file>` は **Jev へ接続せずに**、マージされた context と、実際に送られる state を表示します。
+
+````
+jev-guard context: docs/README.md
+configs:
+  /repo/.jev-guard.json — 2 rule(s)
+enabled: true   includeFileName: true
+
+global context: (none)
+file line: file: docs/README.md
+
+rules merged into one request: 2 — Common, Markdown
+merged context (1 part(s)):
+----
+You are a high-quality documentation expert.
+----
+
+state sent to Jev (whole file; an edit request follows `scope`):
+----
+You are a high-quality documentation expert.
+
+file: docs/README.md
+```
+# Title
+...
+```
+----
+````
+
+- `<file>` を省略すると、設定チェーン上のトップレベル `context` を表示します。近い設定が有効になり、
+  遠い設定の `context` は `[shadowed by ...]` として表示されます。
+- `ignore` にマッチするファイルには「送信されない」と表示します。
+- API キーがなくても実行できます。
+
+`/jev-guard check <file>` の結果にも `state sent to Jev:` セクションが付きます
+（長い state は省略されます。全文は `context` サブコマンドで確認してください）。
 
 ## チェック対象（scope）
 
@@ -185,7 +248,7 @@ Jev は否定形（「〜していない」）より肯定形のほうが精度�
 - `"scope": "both"` を設定すると、**ファイル全体と変更部分（before/after）の両方**を渡します。ファイル全体が `maxFileChars` を超える場合は全体のみを切り詰め、変更部分はそのまま渡します。
 - ファイル全体を計算できない場合（完全一致の置換が成立しない場合など）は、`"file"` でも `"both"` でも変更部分にフォールバックします。
 
-既定では、`context` の先頭に `Target file: <path>` を付けて対象ファイル名を Jev に伝えます（`"includeFileName": false` で無効化）。Jev はファイルの種類やパスを踏まえて判定できます。
+既定では state に `file: <プロジェクト相対パス>` 行を含めて対象ファイルを Jev に伝えます（`"includeFileName": false` で無効化）。Jev はファイルの種類やパスを踏まえて判定できます。
 
 ## API キーとエンドポイント
 
@@ -215,7 +278,7 @@ Jev は否定形（「〜していない」）より肯定形のほうが精度�
 
 ## セキュリティ上の注意
 
-- チェック時、**編集内容（ファイル全体・変更部分・その両方）と `context` が Jev のエンドポイントへ送信されます。** 機密情報を含むファイルではルールを絞ってください。
+- チェック時、**編集内容（ファイル全体・変更部分・その両方）と `context` が Jev のエンドポイントへ送信されます。** プロジェクト相対パスと、マッチした全ルールの checks が1リクエストにまとめて送られます。機密情報を含むファイルではルールを絞ってください。
 - プロジェクトの `.jev-guard.json` は、**作業ディレクトリが信頼されている場合のみ**有効です。未信頼のプロジェクトでは無視され、警告を表示します。ユーザー設定 `~/.pi/agent/jev-guard.json` は常に有効です。
 - 作業ディレクトリ外のファイルにはプロジェクト設定を適用しません。
 - `onError` の既定は `"allow"`（Jev が落ちていても編集を通す）です。厳密に止めたい場合は `"block"` を設定してください。

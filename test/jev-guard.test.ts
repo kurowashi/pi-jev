@@ -211,8 +211,9 @@ test("blocks an edit when Jev rejects a check", async () => {
 					assert.equal((init.headers as Record<string, string>).authorization, "Bearer test-key");
 					const body = JSON.parse(String(init.body));
 					assert.equal(body.model, "jev-1.13.0");
-					assert.equal(body.state.scope, "change");
-					assert.match(body.state.change, /before\nfoo\n\+\+\+ after\nbar/);
+					assert.equal(typeof body.state, "string");
+					assert.match(body.state, /file: src\/a\.ts/);
+					assert.match(body.state, /file edit\n```diff\n### Edit 1\n--- before\nfoo\n\+\+\+ after\nbar\n```/);
 					assert.equal(body.questions.check_0.type, "noul");
 					assert.match(body.questions.check_0.instructions, /No bar/);
 					return jevResponse([0.05]);
@@ -399,7 +400,7 @@ test("/jev-guard check marks negated checks", async () => {
 	assert.match(report, /PASS\s+80%\s+dirty code\s+\[negated\]/);
 });
 
-test("sends one blob per rule with only that rule's context", async () => {
+test("merges all matching rules into one request with their contexts", async () => {
 	const root = makeProject({
 		".jev-guard.json": JSON.stringify({
 			context: "global context",
@@ -411,7 +412,7 @@ test("sends one blob per rule with only that rule's context", async () => {
 		"a.md": "foo\n",
 	});
 	const { toolCall } = harness();
-	const bodies: Array<{ state: { context?: string }; questions: Record<string, unknown> }> = [];
+	const bodies: Array<{ state: string; questions: Record<string, unknown> }> = [];
 
 	const result = await withEnv(CLEAN_ENV, () =>
 		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
@@ -441,11 +442,12 @@ test("sends one blob per rule with only that rule's context", async () => {
 	);
 
 	assert.equal(result, undefined);
-	assert.equal(bodies.length, 2);
-	assert.equal(bodies[0]!.state.context, "Target file: a.md\n\nglobal context\n\ndocs context");
-	assert.equal(bodies[1]!.state.context, "Target file: a.md\n\nglobal context\n\nall context");
-	assert.deepEqual(Object.keys(bodies[0]!.questions), ["check_0"]);
-	assert.deepEqual(Object.keys(bodies[1]!.questions), ["check_1"]);
+	assert.equal(bodies.length, 1);
+	assert.equal(
+		bodies[0]!.state,
+		"global context\n\ndocs context\n\nall context\n\nfile: a.md\n\nfile edit\n```diff\n### Edit 1\n--- before\nfoo\n+++ after\nbar\n```",
+	);
+	assert.deepEqual(Object.keys(bodies[0]!.questions), ["check_0", "check_1"]);
 });
 
 test("scope both sends the whole file and the changed blocks", async () => {
@@ -460,11 +462,12 @@ test("scope both sends the whole file and the changed blocks", async () => {
 		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
 			withFetch(async (_url, init) => {
 				const body = JSON.parse(String(init.body));
-				assert.equal(body.state.scope, "both");
-				assert.equal(body.state.file, "a.ts");
-				assert.equal(body.state.content, "bar\n");
-				assert.match(body.state.change, /--- before\nfoo\n\+\+\+ after\nbar/);
-				assert.match(body.questions.check_0.instructions, /complete proposed content and the edited blocks/);
+				assert.match(body.state, /file: a\.ts\n```\nbar\n```/);
+				assert.match(body.state, /file edit\n```diff\n### Edit 1\n--- before\nfoo\n\+\+\+ after\nbar\n```/);
+				assert.match(
+					body.questions.check_0.instructions,
+					/the target file path, the file's complete proposed content, the diff of the edited blocks/,
+				);
 				return jevResponse([0.99]);
 			}, () =>
 				toolCall(
@@ -492,9 +495,9 @@ test("scope both keeps the changed blocks when the file is truncated", async () 
 		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
 			withFetch(async (_url, init) => {
 				const body = JSON.parse(String(init.body));
-				assert.equal(body.state.scope, "both");
-				assert.match(body.state.content, /characters omitted/);
-				assert.match(body.state.change, /--- before\nconst value = 1;/);
+				assert.match(body.state, /characters omitted/);
+				assert.match(body.state, /note: The content was truncated/);
+				assert.match(body.state, /file edit\n```diff\n### Edit 1\n--- before\nconst value = 1;/);
 				return jevResponse([0.99]);
 			}, () =>
 				toolCall(
@@ -506,20 +509,20 @@ test("scope both keeps the changed blocks when the file is truncated", async () 
 	);
 });
 
-test("includeFileName adds the target file to the context unless disabled", async () => {
+test("includeFileName adds the project-relative file line unless disabled", async () => {
 	const rules = [{ files: "**/*.ts", checks: ["No bar"] }];
-	const contexts: Array<string | undefined> = [];
+	const states: string[] = [];
 	const run = (config: Record<string, unknown>) => {
-		const root = makeProject({ ".jev-guard.json": JSON.stringify({ ...config, rules }), "a.ts": "foo\n" });
+		const root = makeProject({ ".jev-guard.json": JSON.stringify({ ...config, rules }), "src/a.ts": "foo\n" });
 		const { toolCall } = harness();
 		return withEnv(CLEAN_ENV, () =>
 			withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
 				withFetch(async (_url, init) => {
-					contexts.push(JSON.parse(String(init.body)).state.context);
+					states.push(JSON.parse(String(init.body)).state);
 					return jevResponse([0.99]);
 				}, () =>
 					toolCall(
-						{ type: "tool_call", toolName: "edit", toolCallId: "1", input: { path: "a.ts", edits: [{ oldText: "foo", newText: "bar" }] } },
+						{ type: "tool_call", toolName: "edit", toolCallId: "1", input: { path: "src/a.ts", edits: [{ oldText: "foo", newText: "bar" }] } },
 						fakeContext(root),
 					),
 				),
@@ -530,7 +533,11 @@ test("includeFileName adds the target file to the context unless disabled", asyn
 	await run({ context: "global context" });
 	await run({ context: "global context", includeFileName: false });
 	await run({ includeFileName: false });
-	assert.deepEqual(contexts, ["Target file: a.ts\n\nglobal context", "global context", undefined]);
+	assert.match(states[0]!, /global context\n\nfile: src\/a\.ts\n\nfile edit\n/);
+	assert.doesNotMatch(states[1]!, /file: src\/a\.ts/);
+	assert.match(states[1]!, /^global context\n\nfile edit\n/);
+	assert.doesNotMatch(states[2]!, /file: src\/a\.ts/);
+	assert.match(states[2]!, /^file edit\n```diff\n/);
 });
 
 test("checks the whole written content for the write tool", async () => {
@@ -542,9 +549,7 @@ test("checks the whole written content for the write tool", async () => {
 		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
 			withFetch(async (_url, init) => {
 				const body = JSON.parse(String(init.body));
-				assert.equal(body.state.scope, "file");
-				assert.equal(body.state.content, "# 日本語\n");
-				assert.equal(body.state.file, "notes.md");
+				assert.match(body.state, /file: notes\.md\n```\n# 日本語\n```/);
 				return jevResponse([0.99]);
 			}, () =>
 				toolCall(
@@ -636,7 +641,7 @@ test("ignore supports `!` negations and basename patterns", async () => {
 		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
 			withFetch(
 				async (_url, init) => {
-					calls.push(JSON.parse(String(init.body)).state.file);
+					calls.push(JSON.parse(String(init.body)).state);
 					return jevResponse([0.99]);
 				},
 				async () => ({
@@ -648,7 +653,8 @@ test("ignore supports `!` negations and basename patterns", async () => {
 	);
 	assert.equal(result.skipped, undefined);
 	assert.equal(result.kept, undefined);
-	assert.deepEqual(calls, ["keep.py"]);
+	assert.equal(calls.length, 1);
+	assert.match(calls[0]!, /file: keep\.py/);
 });
 
 test("an ignore in one config suppresses rules from other configs", async () => {
@@ -789,6 +795,55 @@ test("/jev-guard check reports each check", async () => {
 	const report = ctx.notifications.at(-1)?.message ?? "";
 	assert.match(report, /FAIL\s+20%\s+No bar/);
 	assert.match(report, /PASS\s+95%\s+Has a type/);
+	assert.match(report, /state sent to Jev:/);
+	assert.match(report, /file: a\.ts/);
+});
+
+test("/jev-guard context shows the merged request without calling Jev", async () => {
+	const root = makeProject({
+		".jev-guard.json": JSON.stringify({
+			context: "Global edit convention.",
+			rules: [
+				{ name: "TS", files: "**/*.ts", context: "TS rule context.", checks: ["No bar"] },
+				{ name: "MD", files: "**/*.md", checks: ["Clear"] },
+			],
+		}),
+		"a.ts": "foo\n",
+	});
+	const { commands } = harness();
+	const ctx = fakeContext(root);
+	const handler = commands.get("jev-guard");
+	assert.ok(handler);
+
+	await withEnv(CLEAN_ENV, () => handler("context a.ts", ctx));
+
+	const report = ctx.notifications.at(-1)?.message ?? "";
+	assert.match(report, /jev-guard context: a\.ts/);
+	assert.match(report, /global context \(from .*\.jev-guard\.json\)/);
+	assert.match(report, /Global edit convention\./);
+	assert.match(report, /rules merged into one request: 1 — TS/);
+	assert.match(report, /merged context \(2 part\(s\)\):/);
+	assert.match(report, /TS rule context\./);
+	assert.match(report, /file line: file: a\.ts/);
+	assert.match(report, /state sent to Jev \(whole file; an edit request follows `scope`\):/);
+	assert.match(report, /file: a\.ts/);
+});
+
+test("/jev-guard context without a file lists the global context", async () => {
+	const root = makeProject({
+		".jev-guard.json": JSON.stringify({ context: "Only global.", rules: [] }),
+	});
+	const { commands } = harness();
+	const ctx = fakeContext(root);
+	const handler = commands.get("jev-guard");
+	assert.ok(handler);
+
+	await withEnv(CLEAN_ENV, () => handler("context", ctx));
+
+	const report = ctx.notifications.at(-1)?.message ?? "";
+	assert.match(report, /jev-guard context\b/);
+	assert.match(report, /Only global\./);
+	assert.match(report, /Rules need a target file/);
 });
 
 test("/jev-guard check reports ignored files", async () => {
