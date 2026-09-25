@@ -1,16 +1,15 @@
 /**
  * jev-guard — semantic file-edit checks backed by TypeSafe Jev (System One).
  *
- * Hooks the `edit` and `write` tool calls. For each target file it finds
- * `.jev-guard.json` configs from the file's directory up to the filesystem
- * root (AGENTS.md-style discovery), matches the file against the configured
- * rules, and asks Jev whether the proposed content satisfies each check.
+ * Hooks the `edit` and `write` tool calls. For each target file it finds the
+ * nearest `.jev-guard.json` on the way up to the filesystem root (AGENTS.md-style
+ * discovery), matches the file against the configured rules, and asks Jev
+ * whether the proposed content satisfies each check.
  *
  * A check that is not satisfied blocks the tool call: the rule's `fail` string
  * (or a generated one) is returned to the model as the tool error.
  *
- * Project configs apply only inside the trusted working directory. The user
- * config at `~/.pi/agent/jev-guard.json` always applies.
+ * Configs apply only inside the trusted working directory.
  */
 
 import * as fs from "node:fs";
@@ -26,20 +25,19 @@ import {
 	clippedText,
 	collectChecks,
 	collectKeys,
+	contextLines,
 	createWarnOnce,
 	DEFAULT_MIN_PROBABILITY,
 	disabledByEnv,
 	displayBlock,
 	displayPath,
 	fenced,
-	firstSetting,
-	globalContextLines,
 	handleCheckError,
 	isIgnored,
 	isInside,
 	limitText,
-	loadConfigChain,
-	loadConfigChainFromDir,
+	loadConfig,
+	loadConfigFromDir,
 	matchRules,
 	mergedContexts,
 	message,
@@ -52,6 +50,7 @@ import {
 	ruleLabel,
 	runCommand,
 	satisfiedProbability,
+	stringSetting,
 	uniqueDirs,
 } from "@pi-jev/core";
 import type {
@@ -125,13 +124,13 @@ export default function jevHooks(pi: ExtensionAPI): void {
 		const display = displayPath(absPath, ctx.cwd);
 		const warn = (message: string) => warnings.warn(ctx, message);
 
-		const chain = loadConfigChain<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), warn);
-		if (chain.length === 0) return undefined;
+		const config = loadConfig<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), warn);
+		if (!config) return undefined;
 
-		const settings = resolveSettings(chain);
+		const settings = resolveSettings(config);
 		if (!settings.enabled) return undefined;
 
-		const matched = matchRules(chain, absPath);
+		const matched = matchRules(config, absPath);
 		const checks = collectChecks(matched, settings.minProbability);
 		if (checks.length === 0) return undefined;
 
@@ -222,10 +221,15 @@ export default function jevHooks(pi: ExtensionAPI): void {
 /** Warnings are reported once per session, prefixed with the guard name. */
 const warnings = createWarnOnce(NAME);
 
-function resolveSettings(chain: LoadedConfig<HookConfig>[]): ResolvedSettings {
-	const scope = firstSetting(chain, "scope");
+/** Number of rules declared by a config, shown in status and context output. */
+function ruleCount(config: LoadedConfig): number {
+	return Array.isArray(config.config.rules) ? config.config.rules.length : 0;
+}
+
+function resolveSettings(config: LoadedConfig<HookConfig> | undefined): ResolvedSettings {
+	const scope = stringSetting(config, "scope");
 	return {
-		...resolveBaseSettings(chain),
+		...resolveBaseSettings(config),
 		scope: scope === "file" || scope === "change" || scope === "both" ? scope : undefined,
 	};
 }
@@ -396,15 +400,13 @@ function helpText(): string {
 }
 
 function showStatus(ctx: ExtensionCommandContext, state: CommandState): void {
-	const chain = loadConfigChainFromDir<HookConfig>(CONFIG_NAME, ctx.cwd, ctx.cwd, ctx.isProjectTrusted(), () => {});
-	const settings = resolveSettings(chain);
+	const config = loadConfigFromDir<HookConfig>(CONFIG_NAME, ctx.cwd, ctx.cwd, ctx.isProjectTrusted(), () => {});
+	const settings = resolveSettings(config);
 	const connection = resolveConnection(settings, uniqueDirs([ctx.cwd]));
-	const ruleCount = (entry: LoadedConfig) => (Array.isArray(entry.config.rules) ? entry.config.rules.length : 0);
 
 	const lines = [
 		`jev-guard: ${state.isEnabled() && settings.enabled ? "on" : "off"}`,
-		`configs: ${chain.length === 0 ? "none" : ""}`.trimEnd(),
-		...chain.map((entry) => `  ${entry.file} — ${ruleCount(entry)} rule(s)`),
+		config ? `config: ${config.file} — ${ruleCount(config)} rule(s)` : "config: none",
 		`endpoint: ${connection.endpoint}`,
 		`model: ${connection.model}`,
 		`key: ${connection.credential ? `${connection.credential.name} (${connection.credential.source})` : connection.error}`,
@@ -469,16 +471,16 @@ async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> 
 		return;
 	}
 
-	const chain = loadConfigChain<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), (warning) =>
+	const config = loadConfig<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), (warning) =>
 		ctx.ui.notify(`jev-guard: ${warning}`, "warning"),
 	);
-	const settings = resolveSettings(chain);
-	if (isIgnored(chain, absPath)) {
+	const settings = resolveSettings(config);
+	if (isIgnored(config, absPath)) {
 		ctx.ui.notify(`jev-guard: ${display} is ignored by ${CONFIG_NAME}`, "info");
 		return;
 	}
 
-	const matched = matchRules(chain, absPath);
+	const matched = matchRules(config, absPath);
 	const checks = collectChecks(matched, settings.minProbability);
 	if (checks.length === 0) {
 		ctx.ui.notify(`jev-guard: no rules match ${display}`, "warning");
@@ -552,20 +554,18 @@ function showContext(arg: string, ctx: ExtensionCommandContext): void {
 
 	const display = absPath === undefined ? undefined : displayPath(absPath, ctx.cwd);
 	const warn = (warning: string) => ctx.ui.notify(`jev-guard: ${warning}`, "warning");
-	const chain =
+	const config =
 		absPath === undefined
-			? loadConfigChainFromDir<HookConfig>(CONFIG_NAME, ctx.cwd, ctx.cwd, ctx.isProjectTrusted(), warn)
-			: loadConfigChain<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), warn);
-	const settings = resolveSettings(chain);
-	const ruleCount = (entry: LoadedConfig) => (Array.isArray(entry.config.rules) ? entry.config.rules.length : 0);
+			? loadConfigFromDir<HookConfig>(CONFIG_NAME, ctx.cwd, ctx.cwd, ctx.isProjectTrusted(), warn)
+			: loadConfig<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), warn);
+	const settings = resolveSettings(config);
 
 	const lines: string[] = [
 		display === undefined ? "jev-guard context" : `jev-guard context: ${display}`,
-		`configs: ${chain.length === 0 ? "none" : ""}`.trimEnd(),
-		...chain.map((entry) => `  ${entry.file} — ${ruleCount(entry)} rule(s)`),
+		config ? `config: ${config.file} — ${ruleCount(config)} rule(s)` : "config: none",
 		`enabled: ${settings.enabled}   includeFileName: ${settings.includeFileName}`,
 		"",
-		...globalContextLines(chain),
+		...contextLines(config),
 	];
 
 	if (display === undefined || absPath === undefined) {
@@ -575,10 +575,10 @@ function showContext(arg: string, ctx: ExtensionCommandContext): void {
 			`file line: ${settings.includeFileName ? `file: ${display}` : "(disabled by includeFileName: false)"}`,
 			"",
 		);
-		if (isIgnored(chain, absPath)) {
+		if (isIgnored(config, absPath)) {
 			lines.push(`ignored by ${CONFIG_NAME}: no Jev request is sent for this file.`);
 		} else {
-			const sending = matchRules(chain, absPath).filter(
+			const sending = matchRules(config, absPath).filter(
 				(rule) => normalizeChecks(rule.rule, settings.minProbability).length > 0,
 			);
 			if (sending.length === 0) {

@@ -657,23 +657,24 @@ test("ignore supports `!` negations and basename patterns", async () => {
 	assert.match(calls[0]!, /file: keep\.py/);
 });
 
-test("an ignore in one config suppresses rules from other configs", async () => {
+test("a nearer config replaces the root config instead of merging", async () => {
 	const root = makeProject({
 		".jev-guard.json": JSON.stringify({ rules: [{ files: "**/*.py", checks: ["No prints"] }] }),
 		"pkg/.jev-guard.json": JSON.stringify({ ignore: ["__init__.py"] }),
 		"pkg/__init__.py": "x = 1\n",
+		"pkg/app.py": "x = 1\n",
 	});
 	const { toolCall } = harness();
 	const ctx = fakeContext(root);
 
-	const result = await withEnv(CLEAN_ENV, () =>
+	const results = await withEnv(CLEAN_ENV, () =>
 		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
 			withFetch(
 				async () => {
 					throw new Error("fetch should not be called");
 				},
-				() =>
-					toolCall(
+				async () => ({
+					ignored: await toolCall(
 						{
 							type: "tool_call",
 							toolName: "write",
@@ -682,10 +683,16 @@ test("an ignore in one config suppresses rules from other configs", async () => 
 						},
 						ctx,
 					),
+					replaced: await toolCall(
+						{ type: "tool_call", toolName: "write", toolCallId: "2", input: { path: "pkg/app.py", content: "x = 1\n" } },
+						ctx,
+					),
+				}),
 			),
 		),
 	);
-	assert.equal(result, undefined);
+	assert.equal(results.ignored, undefined);
+	assert.equal(results.replaced, undefined);
 });
 
 test("ignores project configs when the project is not trusted", async () => {
@@ -819,7 +826,8 @@ test("/jev-guard context shows the merged request without calling Jev", async ()
 
 	const report = ctx.notifications.at(-1)?.message ?? "";
 	assert.match(report, /jev-guard context: a\.ts/);
-	assert.match(report, /global context \(from .*\.jev-guard\.json\)/);
+	assert.match(report, /config: .*\.jev-guard\.json — 2 rule\(s\)/);
+	assert.match(report, /context \(from .*\.jev-guard\.json\)/);
 	assert.match(report, /Global edit convention\./);
 	assert.match(report, /rules merged into one request: 1 — TS/);
 	assert.match(report, /merged context \(2 part\(s\)\):/);
@@ -829,9 +837,9 @@ test("/jev-guard context shows the merged request without calling Jev", async ()
 	assert.match(report, /file: a\.ts/);
 });
 
-test("/jev-guard context without a file lists the global context", async () => {
+test("/jev-guard context without a file lists the adopted context", async () => {
 	const root = makeProject({
-		".jev-guard.json": JSON.stringify({ context: "Only global.", rules: [] }),
+		".jev-guard.json": JSON.stringify({ context: "Only top.", rules: [] }),
 	});
 	const { commands } = harness();
 	const ctx = fakeContext(root);
@@ -842,7 +850,7 @@ test("/jev-guard context without a file lists the global context", async () => {
 
 	const report = ctx.notifications.at(-1)?.message ?? "";
 	assert.match(report, /jev-guard context\b/);
-	assert.match(report, /Only global\./);
+	assert.match(report, /Only top\./);
 	assert.match(report, /Rules need a target file/);
 });
 

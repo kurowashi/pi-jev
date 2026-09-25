@@ -11,7 +11,7 @@
 - ファイル名（glob）ごとにチェック内容を指定できる
 - マッチした複数ルールの checks と context は1リクエストにマージされる（API アクセスはファイルごとに1回）
 - Jev に実際に送られる context と state を `/jev-tree-guard context <file>` で確認できる
-- プロジェクトごとの設定ファイル `.jev-tree-guard.json`（AGENTS.md と同じように上位ディレクトリへ探索）
+- プロジェクトごとの設定ファイル `.jev-tree-guard.json`（AGENTS.md と同じく上位ディレクトリへ探索し、最初に見つかった 1 つだけを使う）
 
 想定用途は「ディレクトリやファイル構成を適切に整理・配置するように guard する」ことです。
 `pi-jev-guard`（編集内容のチェック）の姉妹プラグインで、こちらは **配置（placement）** に特化しています。
@@ -27,14 +27,14 @@ write ツールコール
         └─ 存在しない（新規）
                 │
                 ▼
-        対象ディレクトリから上位へ .jev-tree-guard.json を探索
-        （プロジェクト設定は信頼済みの作業ディレクトリ内でのみ有効）
+        対象ディレクトリから上位へ .jev-tree-guard.json を探索し、
+        最初に見つかった 1 つを採用（信頼済みの作業ディレクトリ内でのみ有効）
                 │
                 ▼
         ignore（glob）にマッチしたファイルはチェックせずに終了
                 │
                 ▼
-        files（glob）にマッチするルールの checks を集める
+        採用した設定の files（glob）にマッチするルールの checks を集める
                 │
                 ▼
         作業ディレクトリのツリーを描画
@@ -51,14 +51,15 @@ write ツールコール
 ## インストール
 
 ```bash
-# パッケージとしてインストール
-pi install /path/to/pi-jev-tree-guard
+# リポジトリのルートで依存を入れる（workspace リンクの作成。必須）
+npm install
 
-# または1回だけ読み込んで試す
-pi -e /path/to/pi-jev-tree-guard/extensions/jev-tree-guard.ts
+# パッケージとしてインストール
+pi install /path/to/pi-jev/packages/tree-guard
 ```
 
-1ファイルだけなので `~/.pi/agent/extensions/jev-tree-guard.ts` にコピーしても動きます（依存パッケージなし）。
+`pi-jev-tree-guard` は `@pi-jev/core`（共有の配管）を参照するため、単一ファイルを
+`~/.pi/agent/extensions/` にコピーする運用はできません。
 
 `pi-jev-guard` と併用できます。`edit` は `pi-jev-guard`、`write` の新規作成は `pi-jev-tree-guard` が担当します。
 
@@ -100,15 +101,18 @@ pi -e /path/to/pi-jev-tree-guard/extensions/jev-tree-guard.ts
 
 ## 設定ファイル `.jev-tree-guard.json`
 
-探索は AGENTS.md と同じで、**作成対象ファイルのディレクトリ → 親ディレクトリ → … → ルート** の順です。
-近い設定が優先され、ルールはすべての階層から集められます（近い階層のルールから評価）。
-ユーザー共通設定として `~/.pi/agent/jev-tree-guard.json` も読み込まれます（`PI_CODING_AGENT_DIR` で変更可）。
+探索は AGENTS.md と同じで、**作成対象ファイルのディレクトリ → 親ディレクトリ → … → ファイルシステム root** の順に
+上へ見ていき、**最初に見つかった 1 つだけ**を使います。複数の設定ファイルはマージされません。
+ユーザー共通設定（`~/.pi/agent/jev-tree-guard.json` など）はありません。共通の設定を使いたい場合は、
+リポジトリ root やホームディレクトリなど、祖先のディレクトリに 1 枚置いてください。
+
+採用された設定が `enabled: false` の場合は、チェックが無効になります。
 
 ### トップレベル
 
 | キー | 既定値 | 説明 |
 |---|---|---|
-| `enabled` | `true` | `false` でこの設定を無効化 |
+| `enabled` | `true` | `false` でチェックを無効化 |
 | `endpoint` | 自動 | Jev のエンドポイント URL |
 | `model` | 自動 | Jev のモデル名 |
 | `apiKeyEnv` | 自動 | API キーを読む環境変数名 |
@@ -123,7 +127,7 @@ pi -e /path/to/pi-jev-tree-guard/extensions/jev-tree-guard.ts
 | `timeoutMs` | `20000` | 1回のリクエストのタイムアウト |
 | `fail` | 自動生成 | 失敗時に返す文字列（全ルール共通の既定値） |
 | `context` | なし | すべてのチェックに渡すプロジェクト固有の前提知識（ディレクトリ構成など） |
-| `ignore` | なし | チェックしないファイルの glob。どれかの設定でマッチすると、そのファイルは一切チェックしない |
+| `ignore` | なし | チェックしないファイルの glob。マッチしたファイルは一切チェックしない |
 | `includeFileName` | `true` | state に `file: <プロジェクト相対パス> (new)` 行を含める |
 | `rules` | `[]` | ルールの配列 |
 
@@ -220,7 +224,7 @@ export function login() { ... }
 | `/jev-tree-guard` | 現在の設定・エンドポイント・キーの状態を表示 |
 | `/jev-tree-guard init` | 作業ディレクトリに `.jev-tree-guard.json` の雛形を作成 |
 | `/jev-tree-guard check <file>` | 作成せずに配置チェックを実行（既存ファイルは「新規」として扱う） |
-| `/jev-tree-guard context [<file>]` | マージされた context と Jev に送られる state を表示（`<file>` 省略時はグローバル分のみ） |
+| `/jev-tree-guard context [<file>]` | マージされた context と Jev に送られる state を表示（`<file>` 省略時は採用される設定の context のみ） |
 | `/jev-tree-guard on` / `off` | このセッションでのチェックを有効化 / 無効化 |
 
 `JEV_TREE_GUARD_DISABLE=1` で常時無効にもできます。
@@ -231,11 +235,10 @@ export function login() { ... }
 
 ````
 jev-tree-guard context: src/features/login.ts
-configs:
-  /repo/.jev-tree-guard.json — 2 rule(s)
+config: /repo/.jev-tree-guard.json — 2 rule(s)
 enabled: true   onlyNewFiles: true   includeFileName: true
 
-global context (from /repo/.jev-tree-guard.json):
+context (from /repo/.jev-tree-guard.json):
 ----
 src/ は機能単位で分割する。
 ----
@@ -268,8 +271,7 @@ project tree
 ----
 ````
 
-- `<file>` を省略すると、設定チェーン上のトップレベル `context` を表示します。近い設定が有効になり、
-  遠い設定の `context` は `[shadowed by ...]` として表示されます。
+- `<file>` を省略すると、cwd から探索して採用される設定の `context` を表示します。
 - `ignore` にマッチするファイルには「送信されない」と表示します。
 - API キーがなくても実行できます。
 
@@ -295,7 +297,8 @@ project tree
 ## セキュリティ上の注意
 
 - チェック時、**プロジェクトのツリー、作成しようとしているファイルの内容、`context` が Jev のエンドポイントへ送信されます。** マッチした全ルールの checks が1リクエストにまとめられ、プロジェクト相対パスも含まれます。機密情報を含むリポジトリではルールと `treeIgnore` を絞ってください。
-- プロジェクトの `.jev-tree-guard.json` は、**作業ディレクトリが信頼されている場合のみ**有効です。未信頼のプロジェクトでは無視され、警告を表示します。ユーザー設定 `~/.pi/agent/jev-tree-guard.json` は常に有効です。
+- `.jev-tree-guard.json` は、**作業ディレクトリが信頼されている場合のみ**有効です。未信頼のプロジェクトでは無視され、警告を表示します。
+- 探索はファイルシステム root まで行くため、信頼済みの作業ディレクトリより上にある設定も採用されます（AGENTS.md と同じ挙動）。親ディレクトリを共有する環境では、第三者が置いた設定が採用され得る点に注意してください。
 - 作業ディレクトリ外を対象にした `write` は、プロジェクトツリーが存在しないためチェックしません（警告を出して通過）。
 - `onError` の既定は `"allow"`（Jev が落ちていても作成を通す）です。厳密に止めたい場合は `"block"` を設定してください。
 
@@ -317,6 +320,6 @@ npm test        # node:test（モックした Jev エンドポイントで検証
 ```bash
 cd /tmp/jev-tree-e2e   # .jev-tree-guard.json と src/ などを用意
 pi -p --no-session --model <provider>/<model> \
-  --extension /path/to/pi-jev-tree-guard/extensions/jev-tree-guard.ts \
+  --extension /path/to/pi-jev/packages/tree-guard/src/index.ts \
   "src/ に新しいモジュールを追加して"
 ```

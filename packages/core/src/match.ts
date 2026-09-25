@@ -1,38 +1,35 @@
-/** Rule matching: which configs apply to a file, and which checks they ask for. */
+/** Rule matching: which rules of the adopted config apply to a file. */
 
 import * as path from "node:path";
 import type { BaseConfig, BaseSettings, LoadedConfig, MatchedRule, PendingCheck, RuleConfig } from "./types.ts";
 import { toPosix } from "./util.ts";
 
-/** True when any config in the chain ignores the file, so no rule applies. */
-export function isIgnored<C extends BaseConfig>(chain: LoadedConfig<C>[], filePath: string): boolean {
-	return chain.some((entry) => matchesFilePatterns(entry.config.ignore, entry.baseDir, filePath));
+/** True when the config ignores the file, so no rule applies. */
+export function isIgnored<C extends BaseConfig>(config: LoadedConfig<C> | undefined, filePath: string): boolean {
+	return config !== undefined && matchesFilePatterns(config.config.ignore, config.baseDir, filePath);
 }
 
 /**
- * Rules from every config in the chain whose `files` patterns match the file,
- * nearest config first.
+ * Rules of the adopted config whose `files` patterns match the file.
  *
  * `matchAllWhenNoFiles` decides what a rule without `files` means: skip it
  * (content checks default) or apply it to every file (placement checks).
  */
 export function matchRules<C extends BaseConfig>(
-	chain: LoadedConfig<C>[],
+	config: LoadedConfig<C> | undefined,
 	filePath: string,
 	options: { matchAllWhenNoFiles?: boolean } = {},
 ): MatchedRule<C>[] {
-	if (isIgnored(chain, filePath)) return [];
+	if (!config || isIgnored(config, filePath)) return [];
 
 	const matched: MatchedRule<C>[] = [];
-	for (const config of chain) {
-		const rules = config.config.rules;
-		if (!Array.isArray(rules)) continue;
-		for (const rule of rules) {
-			if (!rule || typeof rule !== "object" || rule.enabled === false) continue;
-			const noFiles = rule.files === undefined || (Array.isArray(rule.files) && rule.files.length === 0);
-			if ((options.matchAllWhenNoFiles && noFiles) || matchesFilePatterns(rule.files, config.baseDir, filePath)) {
-				matched.push({ rule, config });
-			}
+	const rules = config.config.rules;
+	if (!Array.isArray(rules)) return matched;
+	for (const rule of rules) {
+		if (!rule || typeof rule !== "object" || rule.enabled === false) continue;
+		const noFiles = rule.files === undefined || (Array.isArray(rule.files) && rule.files.length === 0);
+		if ((options.matchAllWhenNoFiles && noFiles) || matchesFilePatterns(rule.files, config.baseDir, filePath)) {
+			matched.push({ rule, config });
 		}
 	}
 	return matched;

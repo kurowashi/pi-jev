@@ -78,7 +78,6 @@ export interface LoadedConfig<C = BaseConfig> {
 	file: string;
 	/** Directory that `files` patterns are relative to. */
 	baseDir: string;
-	global: boolean;
 	config: C;
 }
 

@@ -7,8 +7,8 @@
  * being added. A failed check blocks the write and returns the rule's `fail`
  * text to the model.
  *
- * Project configs (`.jev-tree-guard.json`) apply only inside the trusted working
- * directory. The user config at `~/.pi/agent/jev-tree-guard.json` always applies.
+ * The nearest `.jev-tree-guard.json` on the way up to the filesystem root is
+ * used, and only inside the trusted working directory.
  */
 
 import * as fs from "node:fs";
@@ -25,6 +25,7 @@ import {
 	clippedText,
 	collectChecks,
 	collectKeys,
+	contextLines,
 	createWarnOnce,
 	DEFAULT_MIN_PROBABILITY,
 	disabledByEnv,
@@ -32,13 +33,12 @@ import {
 	displayPath,
 	fenced,
 	globToRegExp,
-	globalContextLines,
 	handleCheckError,
 	isIgnored,
 	isInside,
 	limitText,
-	loadConfigChain,
-	loadConfigChainFromDir,
+	loadConfig,
+	loadConfigFromDir,
 	matchRules,
 	mergedContexts,
 	message,
@@ -179,15 +179,15 @@ export default function jevTreeGuard(pi: ExtensionAPI): void {
 
 		const isNew = !fs.existsSync(absPath);
 
-		const chain = loadConfigChain<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), warn);
-		if (chain.length === 0) return undefined;
+		const config = loadConfig<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), warn);
+		if (!config) return undefined;
 
-		const settings = resolveSettings(chain);
+		const settings = resolveSettings(config);
 		if (!settings.enabled) return undefined;
 		if (!isNew && settings.onlyNewFiles) return undefined;
-		if (isIgnored(chain, absPath)) return undefined;
+		if (isIgnored(config, absPath)) return undefined;
 
-		const matched = matchRules(chain, absPath, { matchAllWhenNoFiles: true });
+		const matched = matchRules(config, absPath, { matchAllWhenNoFiles: true });
 		const checks = collectChecks(matched, settings.minProbability);
 		if (checks.length === 0) return undefined;
 
@@ -284,14 +284,19 @@ export default function jevTreeGuard(pi: ExtensionAPI): void {
 /** Warnings are reported once per session, prefixed with the guard name. */
 const warnings = createWarnOnce(NAME);
 
-function resolveSettings(chain: LoadedConfig<HookConfig>[]): ResolvedSettings {
+/** Number of rules declared by a config, shown in status and context output. */
+function ruleCount(config: LoadedConfig): number {
+	return Array.isArray(config.config.rules) ? config.config.rules.length : 0;
+}
+
+function resolveSettings(config: LoadedConfig<HookConfig> | undefined): ResolvedSettings {
 	return {
-		...resolveBaseSettings(chain),
-		onlyNewFiles: booleanSetting(chain, "onlyNewFiles") ?? true,
-		includeContent: booleanSetting(chain, "includeContent") ?? true,
-		maxTreeEntries: numberSetting(chain, "maxTreeEntries") ?? DEFAULT_MAX_TREE_ENTRIES,
-		maxTreeDepth: numberSetting(chain, "maxTreeDepth") ?? DEFAULT_MAX_TREE_DEPTH,
-		treeIgnore: stringListSetting(chain, "treeIgnore") ?? DEFAULT_TREE_IGNORE,
+		...resolveBaseSettings(config),
+		onlyNewFiles: booleanSetting(config, "onlyNewFiles") ?? true,
+		includeContent: booleanSetting(config, "includeContent") ?? true,
+		maxTreeEntries: numberSetting(config, "maxTreeEntries") ?? DEFAULT_MAX_TREE_ENTRIES,
+		maxTreeDepth: numberSetting(config, "maxTreeDepth") ?? DEFAULT_MAX_TREE_DEPTH,
+		treeIgnore: stringListSetting(config, "treeIgnore") ?? DEFAULT_TREE_IGNORE,
 	};
 }
 
@@ -528,15 +533,13 @@ function helpText(): string {
 }
 
 function showStatus(ctx: ExtensionCommandContext, state: CommandState): void {
-	const chain = loadConfigChainFromDir<HookConfig>(CONFIG_NAME, ctx.cwd, ctx.cwd, ctx.isProjectTrusted(), () => {});
-	const settings = resolveSettings(chain);
+	const config = loadConfigFromDir<HookConfig>(CONFIG_NAME, ctx.cwd, ctx.cwd, ctx.isProjectTrusted(), () => {});
+	const settings = resolveSettings(config);
 	const connection = resolveConnection(settings, uniqueDirs([ctx.cwd]));
-	const ruleCount = (entry: LoadedConfig) => (Array.isArray(entry.config.rules) ? entry.config.rules.length : 0);
 
 	const lines = [
 		`jev-tree-guard: ${state.isEnabled() && settings.enabled ? "on" : "off"}`,
-		`configs: ${chain.length === 0 ? "none" : ""}`.trimEnd(),
-		...chain.map((entry) => `  ${entry.file} — ${ruleCount(entry)} rule(s)`),
+		config ? `config: ${config.file} — ${ruleCount(config)} rule(s)` : "config: none",
 		`endpoint: ${connection.endpoint}`,
 		`model: ${connection.model}`,
 		`key: ${connection.credential ? `${connection.credential.name} (${connection.credential.source})` : connection.error}`,
@@ -622,16 +625,16 @@ async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> 
 		content = undefined;
 	}
 
-	const chain = loadConfigChain<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), (warning) =>
+	const config = loadConfig<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), (warning) =>
 		ctx.ui.notify(`jev-tree-guard: ${warning}`, "warning"),
 	);
-	const settings = resolveSettings(chain);
-	if (isIgnored(chain, absPath)) {
+	const settings = resolveSettings(config);
+	if (isIgnored(config, absPath)) {
 		ctx.ui.notify(`jev-tree-guard: ${display} is ignored by ${CONFIG_NAME}`, "info");
 		return;
 	}
 
-	const matched = matchRules(chain, absPath, { matchAllWhenNoFiles: true });
+	const matched = matchRules(config, absPath, { matchAllWhenNoFiles: true });
 	const checks = collectChecks(matched, settings.minProbability);
 	if (checks.length === 0) {
 		ctx.ui.notify(`jev-tree-guard: no rules match ${display}`, "warning");
@@ -714,20 +717,18 @@ function showContext(arg: string, ctx: ExtensionCommandContext): void {
 
 	const display = absPath === undefined ? undefined : displayPath(absPath, ctx.cwd);
 	const warn = (warning: string) => ctx.ui.notify(`jev-tree-guard: ${warning}`, "warning");
-	const chain =
+	const config =
 		absPath === undefined
-			? loadConfigChainFromDir<HookConfig>(CONFIG_NAME, ctx.cwd, ctx.cwd, ctx.isProjectTrusted(), warn)
-			: loadConfigChain<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), warn);
-	const settings = resolveSettings(chain);
-	const ruleCount = (entry: LoadedConfig) => (Array.isArray(entry.config.rules) ? entry.config.rules.length : 0);
+			? loadConfigFromDir<HookConfig>(CONFIG_NAME, ctx.cwd, ctx.cwd, ctx.isProjectTrusted(), warn)
+			: loadConfig<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), warn);
+	const settings = resolveSettings(config);
 
 	const lines: string[] = [
 		display === undefined ? "jev-tree-guard context" : `jev-tree-guard context: ${display}`,
-		`configs: ${chain.length === 0 ? "none" : ""}`.trimEnd(),
-		...chain.map((entry) => `  ${entry.file} — ${ruleCount(entry)} rule(s)`),
+		config ? `config: ${config.file} — ${ruleCount(config)} rule(s)` : "config: none",
 		`enabled: ${settings.enabled}   onlyNewFiles: ${settings.onlyNewFiles}   includeFileName: ${settings.includeFileName}`,
 		"",
-		...globalContextLines(chain),
+		...contextLines(config),
 	];
 
 	if (display === undefined || absPath === undefined) {
@@ -737,10 +738,10 @@ function showContext(arg: string, ctx: ExtensionCommandContext): void {
 			`file line: ${settings.includeFileName ? `file: ${display} (new)` : "(disabled by includeFileName: false)"}`,
 			"",
 		);
-		if (isIgnored(chain, absPath)) {
+		if (isIgnored(config, absPath)) {
 			lines.push(`ignored by ${CONFIG_NAME}: no Jev request is sent for this file.`);
 		} else {
-			const sending = matchRules(chain, absPath, { matchAllWhenNoFiles: true }).filter(
+			const sending = matchRules(config, absPath, { matchAllWhenNoFiles: true }).filter(
 				(rule) => normalizeChecks(rule.rule, settings.minProbability).length > 0,
 			);
 			if (sending.length === 0) {

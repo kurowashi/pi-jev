@@ -4,7 +4,7 @@
 チェックを満たさない編集は **実行前にブロック** し、指定した文字列をツール結果としてモデルに返します。
 
 - ファイル名（glob）ごとにチェック内容を指定できる
-- プロジェクトごとの設定ファイル `.jev-guard.json`（AGENTS.md と同じように上位ディレクトリへ探索）
+- プロジェクトごとの設定ファイル `.jev-guard.json`（AGENTS.md と同じく上位ディレクトリへ探索し、最初に見つかった 1 つだけを使う）
 - マッチした複数ルールの checks と context は1リクエストにマージされる（API アクセスはファイルごとに1回）
 - Jev に実際に送られる context と state を `/jev-guard context <file>` で確認できる
 - チェックを満たさなければツールコールを失敗させ、`fail` に書いた任意の文字列を返す
@@ -15,14 +15,14 @@
 edit / write ツールコール
         │
         ▼
-編集対象ファイルのディレクトリから上位へ .jev-guard.json を探索
-（プロジェクト設定は信頼済みの作業ディレクトリ内でのみ有効）
+編集対象ファイルのディレクトリから上位へ .jev-guard.json を探索し、
+最初に見つかった 1 つを採用（信頼済みの作業ディレクトリ内でのみ有効）
         │
         ▼
 ignore（glob）にマッチしたファイルはチェックせずに終了
         │
         ▼
-files（glob）にマッチするルールの checks と context を集めて1つにマージ
+採用した設定の files（glob）にマッチするルールの checks と context を1つにマージ
         │
         ▼
 Jev に1リクエストで yes/no の質問としてまとめて投げる（noul）
@@ -34,14 +34,15 @@ Jev に1リクエストで yes/no の質問としてまとめて投げる（noul
 ## インストール
 
 ```bash
-# パッケージとしてインストール
-pi install /path/to/jev-guard
+# リポジトリのルートで依存を入れる（workspace リンクの作成。必須）
+npm install
 
-# または1回だけ読み込んで試す
-pi -e /path/to/jev-guard/extensions/jev-guard.ts
+# パッケージとしてインストール
+pi install /path/to/pi-jev/packages/guard
 ```
 
-1ファイルだけなので `~/.pi/agent/extensions/jev-guard.ts` にコピーしても動きます（依存パッケージなし）。
+`pi-jev-guard` は `@pi-jev/core`（共有の配管）を参照するため、単一ファイルを
+`~/.pi/agent/extensions/` にコピーする運用はできません。
 
 ## クイックスタート
 
@@ -76,15 +77,18 @@ pi -e /path/to/jev-guard/extensions/jev-guard.ts
 
 ## 設定ファイル `.jev-guard.json`
 
-探索は AGENTS.md と同じで、**編集対象ファイルのディレクトリ → 親ディレクトリ → … → ルート** の順です。
-近い設定が優先され、ルールはすべての階層から集められます（近い階層のルールから評価）。
-ユーザー共通設定として `~/.pi/agent/jev-guard.json` も読み込まれます（`PI_CODING_AGENT_DIR` で変更可）。
+探索は AGENTS.md と同じで、**編集対象ファイルのディレクトリ → 親ディレクトリ → … → ファイルシステム root** の順に
+上へ見ていき、**最初に見つかった 1 つだけ**を使います。複数の設定ファイルはマージされません。
+ユーザー共通設定（`~/.pi/agent/jev-guard.json` など）はありません。共通の設定を使いたい場合は、
+リポジトリ root やホームディレクトリなど、祖先のディレクトリに 1 枚置いてください。
+
+採用された設定が `enabled: false` の場合は、チェックが無効になります。
 
 ### トップレベル
 
 | キー | 既定値 | 説明 |
 |---|---|---|
-| `enabled` | `true` | `false` でこの設定を無効化 |
+| `enabled` | `true` | `false` でチェックを無効化 |
 | `endpoint` | 自動 | Jev のエンドポイント URL |
 | `model` | 自動 | Jev のモデル名 |
 | `apiKeyEnv` | 自動 | API キーを読む環境変数名 |
@@ -117,7 +121,7 @@ glob は `**`（任意の階層）、`*`（同一階層内）、`?`（1文字）
 
 ### チェック対象外にする（`ignore`）
 
-`ignore` に glob を書くと、そのファイルはどの設定のどのルールでもチェックされません。
+`ignore` に glob を書くと、そのファイルは採用された設定のどのルールでもチェックされません。
 `__init__.py` のような定型的なファイルや生成物をまとめて対象外にできます。
 
 ```json
@@ -131,7 +135,7 @@ glob は `**`（任意の階層）、`*`（同一階層内）、`?`（1文字）
 
 - 文字列 1 つでも配列でも指定できます。書き方は `files` と同じで、`/` を含まないパターンはファイル名にマッチします。
 - 先頭に `!` を付けると除外を打ち消せます（例: `["*.py", "!keep.py"]` では `keep.py` だけチェックされます）。
-- 探索された設定のうち **1 つでも** `ignore` にマッチすると、そのファイルはチェックされず、Jev へのリクエストも送られません。親ディレクトリ側の設定のルールも適用されません。
+- `ignore` にマッチしたファイルはチェックされず、Jev へのリクエストも送られません。
 - `/jev-guard check` では `ignored` と表示され、Jev には接続しません。
 
 ### 確率の反転（`negate`）
@@ -174,7 +178,7 @@ Jev は否定形（「〜していない」）より肯定形のほうが精度�
 | `/jev-guard` | 現在の設定・エンドポイント・キーの状態を表示 |
 | `/jev-guard init` | 作業ディレクトリに `.jev-guard.json` の雛形を作成 |
 | `/jev-guard check <file>` | 編集せずに現在のファイル内容でチェックを実行 |
-| `/jev-guard context [<file>]` | マージされた context と Jev に送られる state を表示（`<file>` 省略時はグローバル分のみ） |
+| `/jev-guard context [<file>]` | マージされた context と Jev に送られる state を表示（`<file>` 省略時は採用される設定の context のみ） |
 | `/jev-guard on` / `off` | このセッションでのチェックを有効化 / 無効化 |
 
 `JEV_GUARD_DISABLE=1` で常時無効にもできます。
@@ -206,11 +210,10 @@ file edit
 
 ````
 jev-guard context: docs/README.md
-configs:
-  /repo/.jev-guard.json — 2 rule(s)
+config: /repo/.jev-guard.json — 2 rule(s)
 enabled: true   includeFileName: true
 
-global context: (none)
+context: (none)
 file line: file: docs/README.md
 
 rules merged into one request: 2 — Common, Markdown
@@ -231,8 +234,7 @@ file: docs/README.md
 ----
 ````
 
-- `<file>` を省略すると、設定チェーン上のトップレベル `context` を表示します。近い設定が有効になり、
-  遠い設定の `context` は `[shadowed by ...]` として表示されます。
+- `<file>` を省略すると、cwd から探索して採用される設定の `context` を表示します。
 - `ignore` にマッチするファイルには「送信されない」と表示します。
 - API キーがなくても実行できます。
 
@@ -279,7 +281,8 @@ file: docs/README.md
 ## セキュリティ上の注意
 
 - チェック時、**編集内容（ファイル全体・変更部分・その両方）と `context` が Jev のエンドポイントへ送信されます。** プロジェクト相対パスと、マッチした全ルールの checks が1リクエストにまとめて送られます。機密情報を含むファイルではルールを絞ってください。
-- プロジェクトの `.jev-guard.json` は、**作業ディレクトリが信頼されている場合のみ**有効です。未信頼のプロジェクトでは無視され、警告を表示します。ユーザー設定 `~/.pi/agent/jev-guard.json` は常に有効です。
+- `.jev-guard.json` は、**作業ディレクトリが信頼されている場合のみ**有効です。未信頼のプロジェクトでは無視され、警告を表示します。
+- 探索はファイルシステム root まで行くため、信頼済みの作業ディレクトリより上にある設定も採用されます（AGENTS.md と同じ挙動）。親ディレクトリを共有する環境では、第三者が置いた設定が採用され得る点に注意してください。
 - 作業ディレクトリ外のファイルにはプロジェクト設定を適用しません。
 - `onError` の既定は `"allow"`（Jev が落ちていても編集を通す）です。厳密に止めたい場合は `"block"` を設定してください。
 
@@ -300,6 +303,6 @@ npm test        # node:test（モックした Jev エンドポイントで検証
 ```bash
 cd /tmp/jev-e2e   # .jev-guard.json と対象ファイルを用意
 pi -p --no-session --model <provider>/<model> \
-  --extension /path/to/jev-guard/extensions/jev-guard.ts \
+  --extension /path/to/pi-jev/packages/guard/src/index.ts \
   "note.txt に BANANA という行を追加して"
 ```

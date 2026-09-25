@@ -63,21 +63,12 @@ export async function runCommand(
 	}
 }
 
-/** Global context values from the chain, marking the first (effective) one. */
-export function globalContextLines<C extends BaseConfig>(chain: LoadedConfig<C>[]): string[] {
-	const sources = chain
-		.map((entry) => ({ file: entry.file, value: entry.config.context }))
-		.filter(
-			(entry): entry is { file: string; value: string } =>
-				typeof entry.value === "string" && entry.value.trim().length > 0,
-		);
-	if (sources.length === 0) return ["global context: (none)"];
-	const lines: string[] = [];
-	for (const [index, source] of sources.entries()) {
-		const shadowed = index === 0 ? "" : ` [shadowed by ${sources[0]!.file}]`;
-		lines.push(`global context (from ${source.file})${shadowed}:`, ...displayBlock(source.value.trim()));
-	}
-	return lines;
+/** The top-level context of the adopted config, or a "(none)" line. */
+export function contextLines<C extends BaseConfig>(config: LoadedConfig<C> | undefined): string[] {
+	if (!config) return ["context: (none)"];
+	const value = typeof config.config.context === "string" ? config.config.context.trim() : "";
+	if (value.length === 0) return ["context: (none)"];
+	return [`context (from ${config.file}):`, ...displayBlock(value)];
 }
 
 /** Caps a long state document for command output and points at the full-text command. */
