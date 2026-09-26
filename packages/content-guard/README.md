@@ -75,7 +75,7 @@ git 経由で入れる場合はモノレポの root から `pi install git:githu
 | `scope` | 自動 | `"change"` / `"file"` / `"both"`（後述） |
 | `includeFileName` | `true` | state に `file: <path>` 行を含める |
 | `maxFileChars` | `40000` | ファイル内容の最大文字数（超えた分は中央を省略） |
-| `timeoutMs` | `20000` | 1 リクエストのタイムアウト |
+| `timeoutSeconds` | `20` | 1 リクエストのタイムアウト（秒） |
 | `fail` | 自動生成 | 失敗時に返す文字列（全ルール共通の既定値） |
 | `context` | なし | すべてのチェックに渡す前提知識 |
 | `ignore` | なし | チェックしないファイルの glob |

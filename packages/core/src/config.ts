@@ -86,6 +86,7 @@ export function readConfigFile<C extends BaseConfig = BaseConfig>(
 /** Settings every guard needs, read from the adopted config. */
 export function resolveBaseSettings<C extends BaseConfig>(config: LoadedConfig<C> | undefined): BaseSettings {
 	const onError = stringSetting(config, "onError");
+	const timeoutSeconds = numberSetting(config, "timeoutSeconds");
 	return {
 		enabled: booleanSetting(config, "enabled") !== false,
 		endpoint: stringSetting(config, "endpoint"),
@@ -95,7 +96,7 @@ export function resolveBaseSettings<C extends BaseConfig>(config: LoadedConfig<C
 		onError: onError === "block" ? "block" : "allow",
 		includeFileName: booleanSetting(config, "includeFileName") !== false,
 		maxFileChars: numberSetting(config, "maxFileChars") ?? DEFAULT_MAX_FILE_CHARS,
-		timeoutMs: numberSetting(config, "timeoutMs") ?? DEFAULT_TIMEOUT_MS,
+		timeoutMs: timeoutSeconds === undefined ? DEFAULT_TIMEOUT_MS : Math.floor(timeoutSeconds * 1000),
 		fail: stringSetting(config, "fail"),
 		context: stringSetting(config, "context"),
 	};

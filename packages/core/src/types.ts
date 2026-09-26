@@ -49,7 +49,8 @@ export interface BaseConfig {
 	includeFileName?: boolean;
 	/** Truncate the proposed content sent to Jev. */
 	maxFileChars?: number;
-	timeoutMs?: number;
+	/** Per-request timeout in seconds. */
+	timeoutSeconds?: number;
 	fail?: string;
 	/** Extra context sent to Jev with every request (all rules). */
 	context?: string;

@@ -95,6 +95,7 @@ test("resolveBaseSettings reads one config and rejects malformed values", () => 
 			endpoint: "  https://example.test  ",
 			minProbability: "high",
 			maxFileChars: 12_000,
+			timeoutSeconds: 30,
 			context: "  trim me  ",
 		}),
 	});
@@ -107,7 +108,7 @@ test("resolveBaseSettings reads one config and rejects malformed values", () => 
 	assert.equal(settings.endpoint, "https://example.test");
 	assert.equal(settings.minProbability, 0.5);
 	assert.equal(settings.maxFileChars, 12_000);
-	assert.equal(settings.timeoutMs, 20_000);
+	assert.equal(settings.timeoutMs, 30_000);
 	assert.equal(settings.includeFileName, true);
 	assert.equal(settings.context, "trim me");
 });
@@ -118,6 +119,7 @@ test("resolveBaseSettings falls back to defaults without a config", () => {
 	assert.equal(settings.onError, "allow");
 	assert.equal(settings.minProbability, 0.5);
 	assert.equal(settings.maxFileChars, 40_000);
+	assert.equal(settings.timeoutMs, 20_000);
 	assert.equal(settings.includeFileName, true);
 });
 
