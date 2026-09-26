@@ -5,10 +5,27 @@
 	"description": "Monorepo for the Jev (TypeSafe System One) guard plugins for Pi",
 	"license": "MIT",
 	"type": "module",
+	"pi": {
+		"extensions": ["./packages/content-guard/src/index.ts", "./packages/placement-guard/src/index.ts"]
+	},
+	"engines": {
+		"node": ">=22.19.0"
+	},
 	"workspaces": [
 		"packages/*"
 	],
+	"devDependencies": {
+		"@biomejs/biome": "2.5.14",
+		"@earendil-works/pi-coding-agent": "0.87.1",
+		"@types/node": "^24.0.0",
+		"lefthook": "2.1.14",
+		"typescript": "7.0.2"
+	},
 	"scripts": {
-		"test": "npm run test --workspaces --if-present"
+		"check": "biome check . && tsc --noEmit",
+		"fix": "biome check --write .",
+		"test": "node --test \"packages/*/test/**/*.test.ts\" \"test/**/*.test.ts\"",
+		"test:coverage": "node --test --experimental-test-coverage --test-coverage-lines=85 --test-coverage-branches=80 --test-coverage-functions=80 \"packages/*/test/**/*.test.ts\"",
+		"verify": "npm run check && npm test && npm run test:coverage"
 	}
 }

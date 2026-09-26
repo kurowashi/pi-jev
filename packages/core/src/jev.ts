@@ -23,22 +23,28 @@ export interface JevRequest {
 	timeoutMs: number;
 }
 
+/** The Jev question for one pending check. */
+function questionFor(check: PendingCheck, subject: string, describeState: string): Record<string, unknown> {
+	const ask = check.negate
+		? `Answer yes if the following statement describes the ${subject}: ${check.text}`
+		: `Answer yes if the ${subject} satisfies this requirement: ${check.text}`;
+	const criteria = check.negate
+		? {
+				true: `The statement describes the ${subject}.`,
+				false: `The statement does not describe the ${subject}.`,
+			}
+		: { true: "The requirement is satisfied.", false: "The requirement is violated." };
+	return {
+		type: "noul",
+		instructions: `The state contains ${describeState}. ${ask}`,
+		criteria,
+	};
+}
+
 export async function callJev(request: JevRequest): Promise<JevOutcome> {
 	const questions: Record<string, unknown> = {};
 	for (const check of request.checks) {
-		const ask = check.negate
-			? `Answer yes if the following statement describes the ${request.subject}: ${check.text}`
-			: `Answer yes if the ${request.subject} satisfies this requirement: ${check.text}`;
-		questions[check.name] = {
-			type: "noul",
-			instructions: `The state contains ${request.describeState}. ${ask}`,
-			criteria: check.negate
-				? {
-						true: `The statement describes the ${request.subject}.`,
-						false: `The statement does not describe the ${request.subject}.`,
-					}
-				: { true: "The requirement is satisfied.", false: "The requirement is violated." },
-		};
+		questions[check.name] = questionFor(check, request.subject, request.describeState);
 	}
 
 	let response: Response;
@@ -91,7 +97,8 @@ export function describeFetchError(error: unknown, timeoutMs: number): string {
 }
 
 export function statusHint(status: number): string {
-	if (status === 400) return " (check the request size: state and the longest question must fit the model's token budget)";
+	if (status === 400)
+		return " (check the request size: state and the longest question must fit the model's token budget)";
 	if (status === 401 || status === 403) return " (check the API key)";
 	if (status === 402) return " (payment required)";
 	if (status === 404 || status === 405 || status === 410) return " (check the endpoint URL)";

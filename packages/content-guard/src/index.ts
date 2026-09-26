@@ -17,8 +17,19 @@ import * as path from "node:path";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
+	ExtensionContext,
 	ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
+import type {
+	BaseConfig,
+	BaseSettings,
+	CommandState,
+	GuardFlavor,
+	JevOutcome,
+	LoadedConfig,
+	MatchedRule,
+	PendingCheck,
+} from "@pi-jev/core";
 import {
 	buildFailureReason,
 	callJev,
@@ -53,14 +64,6 @@ import {
 	stringSetting,
 	uniqueDirs,
 } from "@pi-jev/core";
-import type {
-	BaseConfig,
-	BaseSettings,
-	CommandState,
-	GuardFlavor,
-	JevOutcome,
-	LoadedConfig,
-} from "@pi-jev/core";
 
 // Re-exported for the tests that exercise the shared helpers.
 export { globToRegExp, parseDotEnv, renderTemplate } from "@pi-jev/core";
@@ -89,16 +92,143 @@ interface HookConfig extends BaseConfig {
 }
 
 interface ResolvedSettings extends BaseSettings {
-	scope?: Scope;
+	scope?: Scope | undefined;
 }
 
-type ProposedContent = {
+interface ProposedContent {
 	file: string;
 	scope: Scope;
-	content?: string;
-	change?: string;
-	note?: string;
-};
+	content?: string | undefined;
+	change?: string | undefined;
+	note?: string | undefined;
+}
+
+/** The resolved target for a checked call, or undefined when the call is out of scope. */
+function checkedTarget(
+	event: { toolName: string; input: unknown },
+	ctx: ExtensionContext,
+): { toolName: "edit" | "write"; absPath: string; display: string; input: Record<string, unknown> } | undefined {
+	if (event.toolName !== "edit" && event.toolName !== "write") return undefined;
+	const input = event.input as Record<string, unknown>;
+	const rawPath = input["path"];
+	if (typeof rawPath !== "string" || rawPath.length === 0) return undefined;
+	const absPath = path.resolve(ctx.cwd, rawPath);
+	return { toolName: event.toolName, absPath, display: displayPath(absPath, ctx.cwd), input };
+}
+
+/** The config, checks, and proposed content for one in-scope tool call. */
+interface PreparedCheck {
+	settings: ResolvedSettings;
+	matched: MatchedRule<HookConfig>[];
+	checks: PendingCheck<HookConfig>[];
+	proposed: ProposedContent;
+}
+
+/** Load and match the config for the call; undefined when nothing should run. */
+function prepareCheck(
+	toolName: "edit" | "write",
+	absPath: string,
+	input: Record<string, unknown>,
+	ctx: ExtensionContext,
+	warn: (message: string) => void,
+): PreparedCheck | undefined {
+	const config = loadConfig<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), warn);
+	if (!config) return undefined;
+	const settings = resolveSettings(config);
+	if (!settings.enabled) return undefined;
+	const matched = matchRules(config, absPath);
+	const checks = collectChecks(matched, settings.minProbability);
+	if (checks.length === 0) return undefined;
+	const scope = settings.scope ?? (toolName === "write" ? "file" : "change");
+	const proposed = buildProposedContent(toolName, absPath, input, ctx.cwd, scope, settings.maxFileChars);
+	if (!proposed) return undefined;
+	return { settings, matched, checks, proposed };
+}
+
+/** The checks whose probability is below their threshold. */
+function failedChecks(
+	checks: PendingCheck<HookConfig>[],
+	probabilities: Map<string, number>,
+): PendingCheck<HookConfig>[] {
+	return checks.filter(
+		(check) => satisfiedProbability(check, probabilities.get(check.name) ?? 0) < check.minProbability,
+	);
+}
+
+/** Run the Jev request with the status line bracketed around it. */
+async function requestJev(
+	settings: ResolvedSettings,
+	target: { endpoint: string; model: string; apiKey: string },
+	prepared: { proposed: ProposedContent; contexts: string[]; checks: PendingCheck<HookConfig>[] },
+	ctx: ExtensionContext,
+	display: string,
+): Promise<JevOutcome> {
+	ctx.ui.setStatus(STATUS_KEY, `jev: checking ${display}`);
+	try {
+		return await callJev({
+			endpoint: target.endpoint,
+			model: target.model,
+			apiKey: target.apiKey,
+			state: buildStateDocument(prepared.proposed, prepared.contexts, settings.includeFileName),
+			describeState: describeState(prepared.proposed, settings.includeFileName),
+			subject: "new content",
+			checks: prepared.checks,
+			timeoutMs: settings.timeoutMs,
+		});
+	} finally {
+		ctx.ui.setStatus(STATUS_KEY, undefined);
+	}
+}
+
+/** The blocked result with the failure text for the model. */
+function blockedResult(
+	failures: PendingCheck<HookConfig>[],
+	probabilities: Map<string, number>,
+	settings: ResolvedSettings,
+	display: string,
+	ctx: ExtensionContext,
+): ToolCallEventResult {
+	ctx.ui.notify(`${NAME}: blocked ${display} (${failures.length} check(s) failed)`, "warning");
+	return {
+		block: true,
+		reason: buildFailureReason(
+			failures,
+			probabilities,
+			settings,
+			display,
+			(file, details) =>
+				`Jev check failed for ${file}:\n${details}\nFix the content so every check passes, then retry the edit.`,
+		),
+	};
+}
+
+/** Resolve the connection, call Jev, and turn the verdict into a tool result. */
+async function runCheck(
+	prepared: PreparedCheck,
+	absPath: string,
+	display: string,
+	ctx: ExtensionContext,
+	warn: (message: string) => void,
+): Promise<ToolCallEventResult | undefined> {
+	const { settings, matched, checks, proposed } = prepared;
+	const contexts = mergedContexts(settings, matched);
+	const connection = resolveConnection(settings, uniqueDirs([path.dirname(absPath), ctx.cwd]));
+	const credential = connection.credential;
+	if (!credential) {
+		return handleCheckError(settings, ctx, FLAVOR, connection.error ?? "No Jev API key found.", display, warn);
+	}
+	const outcome = await requestJev(
+		settings,
+		{ endpoint: connection.endpoint, model: connection.model, apiKey: credential.value },
+		{ proposed, contexts, checks },
+		ctx,
+		display,
+	);
+	if (!outcome.ok) return handleCheckError(settings, ctx, FLAVOR, outcome.message, display, warn);
+	const failures = failedChecks(checks, outcome.probabilities);
+	if (failures.length === 0) return undefined;
+	return blockedResult(failures, outcome.probabilities, settings, display, ctx);
+}
 
 // ------------------------------------------------------------------------------------------------
 // Extension entry point
@@ -114,70 +244,12 @@ export default function jevHooks(pi: ExtensionAPI): void {
 
 	pi.on("tool_call", async (event, ctx): Promise<ToolCallEventResult | undefined> => {
 		if (!sessionEnabled || disabledByEnv("JEV_CONTENT_GUARD_DISABLE")) return undefined;
-		if (event.toolName !== "edit" && event.toolName !== "write") return undefined;
-
-		const input = event.input as Record<string, unknown>;
-		const rawPath = input.path;
-		if (typeof rawPath !== "string" || rawPath.length === 0) return undefined;
-
-		const absPath = path.resolve(ctx.cwd, rawPath);
-		const display = displayPath(absPath, ctx.cwd);
+		const target = checkedTarget(event, ctx);
+		if (!target) return undefined;
 		const warn = (message: string) => warnings.warn(ctx, message);
-
-		const config = loadConfig<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), warn);
-		if (!config) return undefined;
-
-		const settings = resolveSettings(config);
-		if (!settings.enabled) return undefined;
-
-		const matched = matchRules(config, absPath);
-		const checks = collectChecks(matched, settings.minProbability);
-		if (checks.length === 0) return undefined;
-
-		const scope = settings.scope ?? (event.toolName === "write" ? "file" : "change");
-		const proposed = buildProposedContent(event.toolName, absPath, input, ctx.cwd, scope, settings.maxFileChars);
-		if (!proposed) return undefined;
-		const contexts = mergedContexts(settings, matched);
-
-		const connection = resolveConnection(settings, uniqueDirs([path.dirname(absPath), ctx.cwd]));
-		if (!connection.credential) {
-			return handleCheckError(settings, ctx, FLAVOR, connection.error ?? "No Jev API key found.", display, warn);
-		}
-
-		ctx.ui.setStatus(STATUS_KEY, `jev: checking ${display}`);
-		let outcome: JevOutcome;
-		try {
-			outcome = await callJev({
-				endpoint: connection.endpoint,
-				model: connection.model,
-				apiKey: connection.credential.value,
-				state: buildStateDocument(proposed, contexts, settings.includeFileName),
-				describeState: describeState(proposed, settings.includeFileName),
-				subject: "new content",
-				checks,
-				timeoutMs: settings.timeoutMs,
-			});
-		} finally {
-			ctx.ui.setStatus(STATUS_KEY, undefined);
-		}
-
-		if (!outcome.ok) {
-			return handleCheckError(settings, ctx, FLAVOR, outcome.message, display, warn);
-		}
-
-		const failures = checks.filter(
-			(check) =>
-				satisfiedProbability(check, outcome.probabilities.get(check.name) ?? 0) < check.minProbability,
-		);
-		if (failures.length === 0) return undefined;
-
-		ctx.ui.notify(`${NAME}: blocked ${display} (${failures.length} check(s) failed)`, "warning");
-		return {
-			block: true,
-			reason: buildFailureReason(failures, outcome.probabilities, settings, display, (file, details) =>
-				`Jev check failed for ${file}:\n${details}\nFix the content so every check passes, then retry the edit.`,
-			),
-		};
+		const prepared = prepareCheck(target.toolName, target.absPath, target.input, ctx, warn);
+		if (!prepared) return undefined;
+		return await runCheck(prepared, target.absPath, target.display, ctx, warn);
 	});
 
 	const commandHandler = async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
@@ -234,11 +306,7 @@ function resolveSettings(config: LoadedConfig<HookConfig> | undefined): Resolved
  * Formats the Jev state as one document: the merged context, the
  * project-relative path, the proposed content, and the diff.
  */
-function buildStateDocument(
-	proposed: ProposedContent,
-	contexts: string[],
-	includeFileName: boolean,
-): string {
+function buildStateDocument(proposed: ProposedContent, contexts: string[], includeFileName: boolean): string {
 	const sections: string[] = [];
 	if (contexts.length > 0) sections.push(contexts.join("\n\n"));
 	const fileLine = includeFileName ? `file: ${proposed.file}` : undefined;
@@ -257,6 +325,40 @@ function buildStateDocument(
 // Proposed content
 // ------------------------------------------------------------------------------------------------
 
+/** The write branch: the whole file content, bounded. */
+function proposedFromWrite(
+	input: Record<string, unknown>,
+	file: string,
+	maxFileChars: number,
+): ProposedContent | undefined {
+	if (typeof input["content"] !== "string") return undefined;
+	const limited = limitText(input["content"], maxFileChars);
+	return { file, scope: "file", content: limited.text, note: limited.note };
+}
+
+/** The branch taken when the resulting file could be predicted. */
+function proposedFromPredicted(
+	predicted: string,
+	change: string | undefined,
+	file: string,
+	scope: Scope,
+	maxFileChars: number,
+): ProposedContent {
+	const limited = limitText(predicted, maxFileChars);
+	if (scope === "both" && change) {
+		return { file, scope: "both", content: limited.text, change, note: limited.note };
+	}
+	if (scope === "file" && predicted.length > maxFileChars && change) {
+		return {
+			file,
+			scope: "change",
+			change,
+			note: "The full file is larger than maxFileChars; only the edited blocks are shown.",
+		};
+	}
+	return { file, scope: "file", content: limited.text, note: limited.note };
+}
+
 function buildProposedContent(
 	toolName: "edit" | "write",
 	absPath: string,
@@ -266,33 +368,14 @@ function buildProposedContent(
 	maxFileChars: number,
 ): ProposedContent | undefined {
 	const file = displayPath(absPath, cwd);
+	if (toolName === "write") return proposedFromWrite(input, file, maxFileChars);
 
-	if (toolName === "write") {
-		if (typeof input.content !== "string") return undefined;
-		const limited = limitText(input.content, maxFileChars);
-		return { file, scope: "file", content: limited.text, note: limited.note };
-	}
-
-	const edits = Array.isArray(input.edits) ? input.edits : [];
+	const edits = Array.isArray(input["edits"]) ? input["edits"] : [];
 	const change = renderChange(edits);
 	const predicted = predictContent(absPath, edits);
-
 	if (predicted !== undefined && scope !== "change") {
-		const limited = limitText(predicted, maxFileChars);
-		if (scope === "both" && change) {
-			return { file, scope: "both", content: limited.text, change, note: limited.note };
-		}
-		if (scope === "file" && predicted.length > maxFileChars && change) {
-			return {
-				file,
-				scope: "change",
-				change,
-				note: "The full file is larger than maxFileChars; only the edited blocks are shown.",
-			};
-		}
-		return { file, scope: "file", content: limited.text, note: limited.note };
+		return proposedFromPredicted(predicted, change, file, scope, maxFileChars);
 	}
-
 	if (!change) return undefined;
 	return {
 		file,
@@ -321,6 +404,38 @@ function readEdits(edits: unknown[]): EditSpec[] | undefined {
 	return out;
 }
 
+/** Match every edit once and reject overlaps; undefined when the prediction cannot be trusted. */
+function matchedSpans(
+	original: string,
+	edits: EditSpec[],
+): Array<{ start: number; end: number; text: string }> | undefined {
+	const spans: Array<{ start: number; end: number; text: string }> = [];
+	for (const edit of edits) {
+		if (edit.oldText.length === 0) return undefined;
+		const first = original.indexOf(edit.oldText);
+		if (first < 0) return undefined;
+		if (original.indexOf(edit.oldText, first + edit.oldText.length) >= 0) return undefined;
+		spans.push({ start: first, end: first + edit.oldText.length, text: edit.newText });
+	}
+	spans.sort((a, b) => a.start - b.start);
+	for (let i = 1; i < spans.length; i++) {
+		const current = spans[i];
+		const previous = spans[i - 1];
+		if (current && previous && current.start < previous.end) return undefined;
+	}
+	return spans;
+}
+
+function applySpans(original: string, spans: Array<{ start: number; end: number; text: string }>): string {
+	let out = "";
+	let cursor = 0;
+	for (const span of spans) {
+		out += original.slice(cursor, span.start) + span.text;
+		cursor = span.end;
+	}
+	return out + original.slice(cursor);
+}
+
 /**
  * Applies edits the way the edit tool does for the common exact-match case.
  * Returns undefined when the file is unreadable, a match is missing or not
@@ -337,26 +452,9 @@ export function predictContent(absPath: string, rawEdits: unknown[]): string | u
 		return undefined;
 	}
 
-	const spans: Array<{ start: number; end: number; text: string }> = [];
-	for (const edit of edits) {
-		if (edit.oldText.length === 0) return undefined;
-		const first = original.indexOf(edit.oldText);
-		if (first < 0) return undefined;
-		if (original.indexOf(edit.oldText, first + edit.oldText.length) >= 0) return undefined;
-		spans.push({ start: first, end: first + edit.oldText.length, text: edit.newText });
-	}
-	spans.sort((a, b) => a.start - b.start);
-	for (let i = 1; i < spans.length; i++) {
-		if (spans[i]!.start < spans[i - 1]!.end) return undefined;
-	}
-
-	let out = "";
-	let cursor = 0;
-	for (const span of spans) {
-		out += original.slice(cursor, span.start) + span.text;
-		cursor = span.end;
-	}
-	return out + original.slice(cursor);
+	const spans = matchedSpans(original, edits);
+	if (!spans) return undefined;
+	return applySpans(original, spans);
 }
 
 function renderChange(rawEdits: unknown[]): string | undefined {
@@ -446,7 +544,10 @@ function initConfig(ctx: ExtensionCommandContext): void {
 		ctx.ui.notify(`jev-content-guard: could not write ${target}: ${message(error)}`, "error");
 		return;
 	}
-	ctx.ui.notify(`jev-content-guard: wrote ${target}. Edit the rules, then run /jev-content-guard check <file>.`, "info");
+	ctx.ui.notify(
+		`jev-content-guard: wrote ${target}. Edit the rules, then run /jev-content-guard check <file>.`,
+		"info",
+	);
 }
 
 async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -540,22 +641,86 @@ async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> 
  * without calling Jev. With a file it resolves the merged request; without a
  * file it shows the global context of each config.
  */
+/** Config load for the context command: a target file or the working directory. */
+function contextConfig(
+	absPath: string | undefined,
+	ctx: ExtensionCommandContext,
+): LoadedConfig<HookConfig> | undefined {
+	const warn = (warning: string) => ctx.ui.notify(`${NAME}: ${warning}`, "warning");
+	if (absPath === undefined) {
+		return loadConfigFromDir<HookConfig>(CONFIG_NAME, ctx.cwd, ctx.cwd, ctx.isProjectTrusted(), warn);
+	}
+	return loadConfig<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), warn);
+}
+
+/** The file's whole content when readable, so the preview shows a realistic request. */
+function previewProposed(absPath: string, display: string, settings: ResolvedSettings): ProposedContent {
+	try {
+		if (fs.statSync(absPath).isFile()) {
+			const limited = limitText(fs.readFileSync(absPath, "utf8"), settings.maxFileChars);
+			return { file: display, scope: "file", content: limited.text, note: limited.note };
+		}
+	} catch {
+		// The file does not exist yet: show the request without content.
+	}
+	return { file: display, scope: "file" };
+}
+
+/** The merged request preview for one file. */
+function appendFileContext(
+	lines: string[],
+	absPath: string,
+	display: string,
+	config: LoadedConfig<HookConfig> | undefined,
+	settings: ResolvedSettings,
+): void {
+	lines.push(
+		`file line: ${settings.includeFileName ? `file: ${display}` : "(disabled by includeFileName: false)"}`,
+		"",
+	);
+	if (isIgnored(config, absPath)) {
+		lines.push(`ignored by ${CONFIG_NAME}: no Jev request is sent for this file.`);
+		return;
+	}
+	const sending = matchRules(config, absPath).filter(
+		(rule) => normalizeChecks(rule.rule, settings.minProbability).length > 0,
+	);
+	if (sending.length === 0) {
+		lines.push("no checks apply to this file: no Jev request is sent.");
+		return;
+	}
+	const contexts = mergedContexts(settings, sending);
+	lines.push(`rules merged into one request: ${sending.length} — ${sending.map((rule) => ruleLabel(rule)).join(", ")}`);
+	if (contexts.length === 0) {
+		lines.push("merged context: (none)");
+	} else {
+		lines.push(`merged context (${contexts.length} part(s)):`, ...displayBlock(contexts.join("\n\n")));
+	}
+	lines.push(
+		"",
+		"state sent to Jev (whole file; an edit request follows `scope`):",
+		...displayBlock(
+			buildStateDocument(previewProposed(absPath, display, settings), contexts, settings.includeFileName),
+		),
+	);
+}
+
+/**
+ * Shows the context and the exact state document a check would send to Jev,
+ * without calling Jev. With a file it resolves the merged request; without a
+ * file it shows the global context of each config.
+ */
 function showContext(arg: string, ctx: ExtensionCommandContext): void {
 	const target = arg.trim();
 	const absPath = target.length > 0 ? path.resolve(ctx.cwd, target) : undefined;
 	if (absPath !== undefined && !isInside(ctx.cwd, absPath)) {
-		ctx.ui.notify(`jev-content-guard: ${displayPath(absPath, ctx.cwd)} is outside the working directory`, "warning");
+		ctx.ui.notify(`${NAME}: ${displayPath(absPath, ctx.cwd)} is outside the working directory`, "warning");
 		return;
 	}
 
 	const display = absPath === undefined ? undefined : displayPath(absPath, ctx.cwd);
-	const warn = (warning: string) => ctx.ui.notify(`jev-content-guard: ${warning}`, "warning");
-	const config =
-		absPath === undefined
-			? loadConfigFromDir<HookConfig>(CONFIG_NAME, ctx.cwd, ctx.cwd, ctx.isProjectTrusted(), warn)
-			: loadConfig<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), warn);
+	const config = contextConfig(absPath, ctx);
 	const settings = resolveSettings(config);
-
 	const lines: string[] = [
 		display === undefined ? "jev-content-guard context" : `jev-content-guard context: ${display}`,
 		config ? `config: ${config.file} — ${ruleCount(config)} rule(s)` : "config: none",
@@ -567,48 +732,8 @@ function showContext(arg: string, ctx: ExtensionCommandContext): void {
 	if (display === undefined || absPath === undefined) {
 		lines.push("", `Rules need a target file: run ${CONTEXT_COMMAND} <file> to see the merged request state.`);
 	} else {
-		lines.push(
-			`file line: ${settings.includeFileName ? `file: ${display}` : "(disabled by includeFileName: false)"}`,
-			"",
-		);
-		if (isIgnored(config, absPath)) {
-			lines.push(`ignored by ${CONFIG_NAME}: no Jev request is sent for this file.`);
-		} else {
-			const sending = matchRules(config, absPath).filter(
-				(rule) => normalizeChecks(rule.rule, settings.minProbability).length > 0,
-			);
-			if (sending.length === 0) {
-				lines.push("no checks apply to this file: no Jev request is sent.");
-			} else {
-				const contexts = mergedContexts(settings, sending);
-				lines.push(
-					`rules merged into one request: ${sending.length} — ${sending.map((rule) => ruleLabel(rule)).join(", ")}`,
-				);
-				if (contexts.length === 0) {
-					lines.push("merged context: (none)");
-				} else {
-					lines.push(`merged context (${contexts.length} part(s)):`, ...displayBlock(contexts.join("\n\n")));
-				}
-
-				let proposed: ProposedContent = { file: display, scope: "file" };
-				try {
-					if (fs.statSync(absPath).isFile()) {
-						const limited = limitText(fs.readFileSync(absPath, "utf8"), settings.maxFileChars);
-						proposed = { file: display, scope: "file", content: limited.text, note: limited.note };
-					}
-				} catch {
-					// The file does not exist yet: show the request without content.
-				}
-				lines.push(
-					"",
-					"state sent to Jev (whole file; an edit request follows `scope`):",
-					...displayBlock(buildStateDocument(proposed, contexts, settings.includeFileName)),
-				);
-			}
-		}
+		appendFileContext(lines, absPath, display, config, settings);
 	}
 
 	ctx.ui.notify(lines.join("\n"), "info");
 }
-
-

@@ -60,7 +60,9 @@ test("loadConfig ignores the config when the project is not trusted", () => {
 	const config = loadConfig(CONFIG, path.join(root, "a.ts"), root, false, (warning) => warnings.push(warning));
 	assert.equal(config, undefined);
 	assert.equal(warnings.length, 1);
-	assert.match(warnings[0]!, /not trusted/);
+	const [warning] = warnings;
+	assert.ok(warning);
+	assert.match(warning, /not trusted/);
 });
 
 test("loadConfig ignores the config when the file is outside the working directory", () => {
@@ -71,7 +73,9 @@ test("loadConfig ignores the config when the file is outside the working directo
 	const config = loadConfig(CONFIG, path.join(other, "b.ts"), project, true, (warning) => warnings.push(warning));
 	assert.equal(config, undefined);
 	assert.equal(warnings.length, 1);
-	assert.match(warnings[0]!, /outside the working directory/);
+	const [warning] = warnings;
+	assert.ok(warning);
+	assert.match(warning, /outside the working directory/);
 });
 
 test("loadConfigFromDir starts at the given directory", () => {

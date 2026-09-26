@@ -12,11 +12,17 @@
 	],
 	"license": "MIT",
 	"type": "module",
+	"engines": {
+		"node": ">=22.19.0"
+	},
 	"pi": {
 		"extensions": [
 			"./src/index.ts"
 		]
 	},
+	"files": [
+		"src"
+	],
 	"dependencies": {
 		"@pi-jev/core": "^0.2.0"
 	},

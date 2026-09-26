@@ -4,9 +4,15 @@
 	"description": "Shared plumbing for the pi-jev guard plugins: config discovery, rule matching, credentials, Jev requests",
 	"license": "MIT",
 	"type": "module",
+	"engines": {
+		"node": ">=22.19.0"
+	},
 	"exports": {
 		".": "./src/index.ts"
 	},
+	"files": [
+		"src"
+	],
 	"scripts": {
 		"test": "node --test test/*.test.ts"
 	}

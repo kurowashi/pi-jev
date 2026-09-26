@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
+import type { ToolCallEventResult } from "@earendil-works/pi-coding-agent";
 import jevTreeGuard, {
 	DEFAULT_TREE_IGNORE,
 	globToRegExp,
@@ -15,7 +16,7 @@ import jevTreeGuard, {
 // Helpers
 // ------------------------------------------------------------------------------------------------
 
-type ToolCallHandler = (event: unknown, ctx: unknown) => Promise<any>;
+type ToolCallHandler = (event: unknown, ctx: unknown) => Promise<ToolCallEventResult | undefined>;
 
 interface Harness {
 	toolCall: ToolCallHandler;
@@ -51,11 +52,11 @@ interface FakeContext {
 		confirm(): Promise<boolean>;
 		input(): Promise<undefined>;
 	};
-	notifications: Array<{ message: string; type?: string }>;
+	notifications: Array<{ message: string; type?: string | undefined }>;
 }
 
 function fakeContext(cwd: string, trusted = true): FakeContext {
-	const notifications: Array<{ message: string; type?: string }> = [];
+	const notifications: Array<{ message: string; type?: string | undefined }> = [];
 	return {
 		cwd,
 		hasUI: false,
@@ -183,11 +184,11 @@ test("renderTree shows the existing structure with the new file marked", () => {
 	});
 	const tree = renderTree(root, "src/lib/helper.ts");
 	assert.match(tree.text, /^\.\/$/m);
-	assert.match(tree.text, /^  src\/$/m);
-	assert.match(tree.text, /^    lib\/$/m);
-	assert.match(tree.text, /^      util\.ts$/m);
-	assert.match(tree.text, /^      helper\.ts \(new\)$/m);
-	assert.match(tree.text, /^  docs\/$/m);
+	assert.match(tree.text, /^ {2}src\/$/m);
+	assert.match(tree.text, /^ {4}lib\/$/m);
+	assert.match(tree.text, /^ {6}util\.ts$/m);
+	assert.match(tree.text, /^ {6}helper\.ts \(new\)$/m);
+	assert.match(tree.text, /^ {2}docs\/$/m);
 	assert.equal(tree.focusDir, "src/lib");
 	assert.deepEqual(tree.createdDirs, []);
 	assert.equal(tree.truncated, false);
@@ -238,8 +239,8 @@ test("renderTree reports when the depth limit cut the tree", () => {
 test("renderTree excludes an existing file when dry-running it as new", () => {
 	const root = makeProject({ "src/a.ts": "", "src/b.ts": "" });
 	const tree = renderTree(root, "src/a.ts", { exclude: "src/a.ts" });
-	assert.doesNotMatch(tree.text, /^    a\.ts$/m);
-	assert.match(tree.text, /^    a\.ts \(new\)$/m);
+	assert.doesNotMatch(tree.text, /^ {4}a\.ts$/m);
+	assert.match(tree.text, /^ {4}a\.ts \(new\)$/m);
 });
 
 // ------------------------------------------------------------------------------------------------
@@ -268,13 +269,13 @@ test("blocks the creation of a misplaced new file", async () => {
 			withFetch(
 				async (url, init) => {
 					assert.equal(url, "https://api.typesafe.ai/v1/systemone");
-					assert.equal((init.headers as Record<string, string>).authorization, "Bearer test-key");
+					assert.equal((init.headers as Record<string, string>)["authorization"], "Bearer test-key");
 					const body = JSON.parse(String(init.body));
 					assert.equal(body.model, "jev-1.13.0");
 					assert.equal(typeof body.state, "string");
 					assert.match(body.state, /^file: src\/features\/new\.ts \(new\)$/m);
 					assert.match(body.state, /^project tree$/m);
-					assert.match(body.state, /^  src\/$/m);
+					assert.match(body.state, /^ {2}src\/$/m);
 					assert.match(body.state, /features\/ \(new dir\)/);
 					assert.match(body.state, /new\.ts \(new\)/);
 					assert.match(body.state, /^file content$/m);
@@ -311,7 +312,10 @@ test("allows the creation when every check passes", async () => {
 
 	const result = await withEnv(CLEAN_ENV, () =>
 		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
-			withFetch(async () => jevResponse([0.9]), () => toolCall(writeEvent("src/new.ts", "x\n"), ctx)),
+			withFetch(
+				async () => jevResponse([0.9]),
+				() => toolCall(writeEvent("src/new.ts", "x\n"), ctx),
+			),
 		),
 	);
 	assert.equal(result, undefined);
@@ -523,8 +527,8 @@ test("/jev-placement-guard check treats an existing file as a proposal", async (
 					assert.match(body.state, /^file: src\/a\.ts \(new\)$/m);
 					assert.match(body.state, /^file content$/m);
 					assert.match(body.state, /export \{\};/);
-					assert.doesNotMatch(body.state, /^    a\.ts$/m);
-					assert.match(body.state, /^    a\.ts \(new\)$/m);
+					assert.doesNotMatch(body.state, /^ {4}a\.ts$/m);
+					assert.match(body.state, /^ {4}a\.ts \(new\)$/m);
 					return jevResponse([0.9]);
 				},
 				() => handler("check src/a.ts", ctx),
@@ -571,8 +575,10 @@ test("/jev-placement-guard merges all matching rules into one request with their
 	);
 
 	assert.equal(bodies.length, 1);
-	assert.match(bodies[0]!.state, /^top context\n\nplacement context\n\nstyle context\n\nfile: src\/a\.ts \(new\)/);
-	assert.deepEqual(Object.keys(bodies[0]!.questions), ["check_0", "check_1"]);
+	const body = bodies[0];
+	assert.ok(body);
+	assert.match(body.state, /^top context\n\nplacement context\n\nstyle context\n\nfile: src\/a\.ts \(new\)/);
+	assert.deepEqual(Object.keys(body.questions), ["check_0", "check_1"]);
 });
 
 test("/jev-placement-guard context shows the merged request without calling Jev", async () => {

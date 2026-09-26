@@ -3,18 +3,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import jevHooks, {
-	globToRegExp,
-	parseDotEnv,
-	predictContent,
-	renderTemplate,
-} from "../src/index.ts";
+import type { ToolCallEventResult } from "@earendil-works/pi-coding-agent";
+import jevHooks, { globToRegExp, parseDotEnv, predictContent, renderTemplate } from "../src/index.ts";
 
 // ------------------------------------------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------------------------------------------
 
-type ToolCallHandler = (event: unknown, ctx: unknown) => Promise<any>;
+type ToolCallHandler = (event: unknown, ctx: unknown) => Promise<ToolCallEventResult | undefined>;
 
 interface Harness {
 	toolCall: ToolCallHandler;
@@ -50,11 +46,11 @@ interface FakeContext {
 		confirm(): Promise<boolean>;
 		input(): Promise<undefined>;
 	};
-	notifications: Array<{ message: string; type?: string }>;
+	notifications: Array<{ message: string; type?: string | undefined }>;
 }
 
 function fakeContext(cwd: string, trusted = true): FakeContext {
-	const notifications: Array<{ message: string; type?: string }> = [];
+	const notifications: Array<{ message: string; type?: string | undefined }> = [];
 	return {
 		cwd,
 		hasUI: false,
@@ -98,7 +94,10 @@ async function withEnv<T>(values: Record<string, string | undefined>, fn: () => 
 	}
 }
 
-function withFetch<T>(handler: (url: string, init: RequestInit) => Promise<Response>, fn: () => Promise<T>): Promise<T> {
+function withFetch<T>(
+	handler: (url: string, init: RequestInit) => Promise<Response>,
+	fn: () => Promise<T>,
+): Promise<T> {
 	const original = globalThis.fetch;
 	globalThis.fetch = ((url: string, init: RequestInit) => handler(String(url), init)) as typeof fetch;
 	return fn().finally(() => {
@@ -150,8 +149,8 @@ test("parseDotEnv reads quoted, exported, and commented values", () => {
 	const dir = makeProject({
 		".env": [
 			"# comment",
-			'PLAIN=value',
-			'EXPORTED=export',
+			"PLAIN=value",
+			"EXPORTED=export",
 			'DOUBLE="a b"',
 			"SINGLE='c d'",
 			"TRAILING=value # note",
@@ -208,7 +207,7 @@ test("blocks an edit when Jev rejects a check", async () => {
 			withFetch(
 				async (url, init) => {
 					assert.equal(url, "https://api.typesafe.ai/v1/systemone");
-					assert.equal((init.headers as Record<string, string>).authorization, "Bearer test-key");
+					assert.equal((init.headers as Record<string, string>)["authorization"], "Bearer test-key");
 					const body = JSON.parse(String(init.body));
 					assert.equal(body.model, "jev-1.13.0");
 					assert.equal(typeof body.state, "string");
@@ -249,11 +248,18 @@ test("allows an edit when every check passes", async () => {
 
 	await withEnv(CLEAN_ENV, () =>
 		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
-			withFetch(async () => jevResponse([0.9]), () =>
-				toolCall(
-					{ type: "tool_call", toolName: "edit", toolCallId: "1", input: { path: "a.ts", edits: [{ oldText: "foo", newText: "baz" }] } },
-					ctx,
-				),
+			withFetch(
+				async () => jevResponse([0.9]),
+				() =>
+					toolCall(
+						{
+							type: "tool_call",
+							toolName: "edit",
+							toolCallId: "1",
+							input: { path: "a.ts", edits: [{ oldText: "foo", newText: "baz" }] },
+						},
+						ctx,
+					),
 			),
 		),
 	).then((result) => {
@@ -318,16 +324,18 @@ test("negate allows the edit when the failure mode is unlikely", async () => {
 
 	const result = await withEnv(CLEAN_ENV, () =>
 		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
-			withFetch(async () => jevResponse([0.05]), () =>
-				toolCall(
-					{
-						type: "tool_call",
-						toolName: "edit",
-						toolCallId: "1",
-						input: { path: "a.ts", edits: [{ oldText: "foo", newText: "bar" }] },
-					},
-					ctx,
-				),
+			withFetch(
+				async () => jevResponse([0.05]),
+				() =>
+					toolCall(
+						{
+							type: "tool_call",
+							toolName: "edit",
+							toolCallId: "1",
+							input: { path: "a.ts", edits: [{ oldText: "foo", newText: "bar" }] },
+						},
+						ctx,
+					),
 			),
 		),
 	);
@@ -392,7 +400,10 @@ test("/jev-content-guard check marks negated checks", async () => {
 
 	await withEnv(CLEAN_ENV, () =>
 		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
-			withFetch(async () => jevResponse([0.2]), () => handler("check a.ts", ctx)),
+			withFetch(
+				async () => jevResponse([0.2]),
+				() => handler("check a.ts", ctx),
+			),
 		),
 	);
 
@@ -443,11 +454,13 @@ test("merges all matching rules into one request with their contexts", async () 
 
 	assert.equal(result, undefined);
 	assert.equal(bodies.length, 1);
+	const body = bodies[0];
+	assert.ok(body);
 	assert.equal(
-		bodies[0]!.state,
+		body.state,
 		"global context\n\ndocs context\n\nall context\n\nfile: a.md\n\nfile edit\n```diff\n### Edit 1\n--- before\nfoo\n+++ after\nbar\n```",
 	);
-	assert.deepEqual(Object.keys(bodies[0]!.questions), ["check_0", "check_1"]);
+	assert.deepEqual(Object.keys(body.questions), ["check_0", "check_1"]);
 });
 
 test("scope both sends the whole file and the changed blocks", async () => {
@@ -460,20 +473,27 @@ test("scope both sends the whole file and the changed blocks", async () => {
 
 	const result = await withEnv(CLEAN_ENV, () =>
 		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
-			withFetch(async (_url, init) => {
-				const body = JSON.parse(String(init.body));
-				assert.match(body.state, /file: a\.ts\n```\nbar\n```/);
-				assert.match(body.state, /file edit\n```diff\n### Edit 1\n--- before\nfoo\n\+\+\+ after\nbar\n```/);
-				assert.match(
-					body.questions.check_0.instructions,
-					/the target file path, the file's complete proposed content, the diff of the edited blocks/,
-				);
-				return jevResponse([0.99]);
-			}, () =>
-				toolCall(
-					{ type: "tool_call", toolName: "edit", toolCallId: "1", input: { path: "a.ts", edits: [{ oldText: "foo", newText: "bar" }] } },
-					ctx,
-				),
+			withFetch(
+				async (_url, init) => {
+					const body = JSON.parse(String(init.body));
+					assert.match(body.state, /file: a\.ts\n```\nbar\n```/);
+					assert.match(body.state, /file edit\n```diff\n### Edit 1\n--- before\nfoo\n\+\+\+ after\nbar\n```/);
+					assert.match(
+						body.questions.check_0.instructions,
+						/the target file path, the file's complete proposed content, the diff of the edited blocks/,
+					);
+					return jevResponse([0.99]);
+				},
+				() =>
+					toolCall(
+						{
+							type: "tool_call",
+							toolName: "edit",
+							toolCallId: "1",
+							input: { path: "a.ts", edits: [{ oldText: "foo", newText: "bar" }] },
+						},
+						ctx,
+					),
 			),
 		),
 	);
@@ -493,17 +513,24 @@ test("scope both keeps the changed blocks when the file is truncated", async () 
 
 	await withEnv(CLEAN_ENV, () =>
 		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
-			withFetch(async (_url, init) => {
-				const body = JSON.parse(String(init.body));
-				assert.match(body.state, /characters omitted/);
-				assert.match(body.state, /note: The content was truncated/);
-				assert.match(body.state, /file edit\n```diff\n### Edit 1\n--- before\nconst value = 1;/);
-				return jevResponse([0.99]);
-			}, () =>
-				toolCall(
-					{ type: "tool_call", toolName: "edit", toolCallId: "1", input: { path: "a.ts", edits: [{ oldText: "const value = 1;", newText: "const value = 2;" }] } },
-					fakeContext(root),
-				),
+			withFetch(
+				async (_url, init) => {
+					const body = JSON.parse(String(init.body));
+					assert.match(body.state, /characters omitted/);
+					assert.match(body.state, /note: The content was truncated/);
+					assert.match(body.state, /file edit\n```diff\n### Edit 1\n--- before\nconst value = 1;/);
+					return jevResponse([0.99]);
+				},
+				() =>
+					toolCall(
+						{
+							type: "tool_call",
+							toolName: "edit",
+							toolCallId: "1",
+							input: { path: "a.ts", edits: [{ oldText: "const value = 1;", newText: "const value = 2;" }] },
+						},
+						fakeContext(root),
+					),
 			),
 		),
 	);
@@ -517,14 +544,21 @@ test("includeFileName adds the project-relative file line unless disabled", asyn
 		const { toolCall } = harness();
 		return withEnv(CLEAN_ENV, () =>
 			withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
-				withFetch(async (_url, init) => {
-					states.push(JSON.parse(String(init.body)).state);
-					return jevResponse([0.99]);
-				}, () =>
-					toolCall(
-						{ type: "tool_call", toolName: "edit", toolCallId: "1", input: { path: "src/a.ts", edits: [{ oldText: "foo", newText: "bar" }] } },
-						fakeContext(root),
-					),
+				withFetch(
+					async (_url, init) => {
+						states.push(JSON.parse(String(init.body)).state);
+						return jevResponse([0.99]);
+					},
+					() =>
+						toolCall(
+							{
+								type: "tool_call",
+								toolName: "edit",
+								toolCallId: "1",
+								input: { path: "src/a.ts", edits: [{ oldText: "foo", newText: "bar" }] },
+							},
+							fakeContext(root),
+						),
 				),
 			),
 		);
@@ -533,29 +567,42 @@ test("includeFileName adds the project-relative file line unless disabled", asyn
 	await run({ context: "global context" });
 	await run({ context: "global context", includeFileName: false });
 	await run({ includeFileName: false });
-	assert.match(states[0]!, /global context\n\nfile: src\/a\.ts\n\nfile edit\n/);
-	assert.doesNotMatch(states[1]!, /file: src\/a\.ts/);
-	assert.match(states[1]!, /^global context\n\nfile edit\n/);
-	assert.doesNotMatch(states[2]!, /file: src\/a\.ts/);
-	assert.match(states[2]!, /^file edit\n```diff\n/);
+	const [firstState, secondState, thirdState] = states;
+	assert.ok(firstState);
+	assert.ok(secondState);
+	assert.ok(thirdState);
+	assert.match(firstState, /global context\n\nfile: src\/a\.ts\n\nfile edit\n/);
+	assert.doesNotMatch(secondState, /file: src\/a\.ts/);
+	assert.match(secondState, /^global context\n\nfile edit\n/);
+	assert.doesNotMatch(thirdState, /file: src\/a\.ts/);
+	assert.match(thirdState, /^file edit\n```diff\n/);
 });
 
 test("checks the whole written content for the write tool", async () => {
-	const root = makeProject({ ".jev-content-guard.json": JSON.stringify({ rules: [{ files: "**/*.md", checks: ["Japanese"] }] }) });
+	const root = makeProject({
+		".jev-content-guard.json": JSON.stringify({ rules: [{ files: "**/*.md", checks: ["Japanese"] }] }),
+	});
 	const { toolCall } = harness();
 	const ctx = fakeContext(root);
 
 	await withEnv(CLEAN_ENV, () =>
 		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
-			withFetch(async (_url, init) => {
-				const body = JSON.parse(String(init.body));
-				assert.match(body.state, /file: notes\.md\n```\n# 日本語\n```/);
-				return jevResponse([0.99]);
-			}, () =>
-				toolCall(
-					{ type: "tool_call", toolName: "write", toolCallId: "1", input: { path: "notes.md", content: "# 日本語\n" } },
-					ctx,
-				),
+			withFetch(
+				async (_url, init) => {
+					const body = JSON.parse(String(init.body));
+					assert.match(body.state, /file: notes\.md\n```\n# 日本語\n```/);
+					return jevResponse([0.99]);
+				},
+				() =>
+					toolCall(
+						{
+							type: "tool_call",
+							toolName: "write",
+							toolCallId: "1",
+							input: { path: "notes.md", content: "# 日本語\n" },
+						},
+						ctx,
+					),
 			),
 		),
 	).then((result) => assert.equal(result, undefined));
@@ -577,7 +624,12 @@ test("does not call Jev when no rule matches", async () => {
 				},
 				() =>
 					toolCall(
-						{ type: "tool_call", toolName: "edit", toolCallId: "1", input: { path: "a.ts", edits: [{ oldText: "foo", newText: "bar" }] } },
+						{
+							type: "tool_call",
+							toolName: "edit",
+							toolCallId: "1",
+							input: { path: "a.ts", edits: [{ oldText: "foo", newText: "bar" }] },
+						},
 						ctx,
 					),
 			),
@@ -654,7 +706,9 @@ test("ignore supports `!` negations and basename patterns", async () => {
 	assert.equal(result.skipped, undefined);
 	assert.equal(result.kept, undefined);
 	assert.equal(calls.length, 1);
-	assert.match(calls[0]!, /file: keep\.py/);
+	const [firstCall] = calls;
+	assert.ok(firstCall);
+	assert.match(firstCall, /file: keep\.py/);
 });
 
 test("a nearer config replaces the root config instead of merging", async () => {
@@ -684,7 +738,12 @@ test("a nearer config replaces the root config instead of merging", async () => 
 						ctx,
 					),
 					replaced: await toolCall(
-						{ type: "tool_call", toolName: "write", toolCallId: "2", input: { path: "pkg/app.py", content: "x = 1\n" } },
+						{
+							type: "tool_call",
+							toolName: "write",
+							toolCallId: "2",
+							input: { path: "pkg/app.py", content: "x = 1\n" },
+						},
 						ctx,
 					),
 				}),
@@ -711,7 +770,12 @@ test("ignores project configs when the project is not trusted", async () => {
 				},
 				() =>
 					toolCall(
-						{ type: "tool_call", toolName: "edit", toolCallId: "1", input: { path: "a.ts", edits: [{ oldText: "foo", newText: "bar" }] } },
+						{
+							type: "tool_call",
+							toolName: "edit",
+							toolCallId: "1",
+							input: { path: "a.ts", edits: [{ oldText: "foo", newText: "bar" }] },
+						},
 						ctx,
 					),
 			),
@@ -738,7 +802,10 @@ test("fails open on Jev errors by default and fails closed with onError block", 
 	const open = harness();
 	const openResult = await withEnv(CLEAN_ENV, () =>
 		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
-			withFetch(async () => new Response("nope", { status: 500 }), () => open.toolCall(event, fakeContext(openRoot))),
+			withFetch(
+				async () => new Response("nope", { status: 500 }),
+				() => open.toolCall(event, fakeContext(openRoot)),
+			),
 		),
 	);
 	assert.equal(openResult, undefined);
@@ -750,7 +817,10 @@ test("fails open on Jev errors by default and fails closed with onError block", 
 	const strict = harness();
 	const strictResult = await withEnv(CLEAN_ENV, () =>
 		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
-			withFetch(async () => new Response("nope", { status: 500 }), () => strict.toolCall(event, fakeContext(strictRoot))),
+			withFetch(
+				async () => new Response("nope", { status: 500 }),
+				() => strict.toolCall(event, fakeContext(strictRoot)),
+			),
 		),
 	);
 	assert.equal((strictResult as { block: boolean }).block, true);
@@ -801,9 +871,11 @@ test("sends the documented Jev request shape", async () => {
 	assert.equal(body.model, "jev-1.13.0");
 	assert.equal(typeof body.state, "string");
 	assert.deepEqual(Object.keys(body.questions), ["check_0"]);
-	assert.equal(body.questions.check_0!.type, "noul");
-	assert.equal(typeof body.questions.check_0!.instructions, "string");
-	assert.deepEqual(body.questions.check_0!.criteria, {
+	const question = body.questions["check_0"];
+	assert.ok(question);
+	assert.equal(question.type, "noul");
+	assert.equal(typeof question.instructions, "string");
+	assert.deepEqual(question.criteria, {
 		true: "The requirement is satisfied.",
 		false: "The requirement is violated.",
 	});
@@ -821,14 +893,19 @@ test("selects the OpenRouter endpoint when only OPENROUTER_API_KEY is available"
 		withFetch(
 			async (url, init) => {
 				assert.equal(url, "https://openrouter.ai/api/alpha/decisions");
-				assert.equal((init.headers as Record<string, string>).authorization, "Bearer from-dotenv");
+				assert.equal((init.headers as Record<string, string>)["authorization"], "Bearer from-dotenv");
 				const body = JSON.parse(String(init.body));
 				assert.equal(body.model, "typesafe/jev-1.13");
 				return jevResponse([0.99]);
 			},
 			() =>
 				toolCall(
-					{ type: "tool_call", toolName: "edit", toolCallId: "1", input: { path: "a.ts", edits: [{ oldText: "foo", newText: "bar" }] } },
+					{
+						type: "tool_call",
+						toolName: "edit",
+						toolCallId: "1",
+						input: { path: "a.ts", edits: [{ oldText: "foo", newText: "bar" }] },
+					},
 					fakeContext(root),
 				),
 		),
@@ -847,7 +924,10 @@ test("/jev-content-guard check reports each check", async () => {
 
 	await withEnv(CLEAN_ENV, () =>
 		withEnv({ SYSTEMONE_API_KEY: "test-key" }, () =>
-			withFetch(async () => jevResponse([0.2, 0.95]), () => handler("check a.ts", ctx)),
+			withFetch(
+				async () => jevResponse([0.2, 0.95]),
+				() => handler("check a.ts", ctx),
+			),
 		),
 	);
 

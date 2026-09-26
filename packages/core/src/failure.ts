@@ -19,7 +19,7 @@ export function satisfiedProbability(check: PendingCheck, raw: number): number {
 export function buildFailureReason<C extends BaseConfig>(
 	failures: PendingCheck<C>[],
 	probabilities: Map<string, number>,
-	settings: { fail?: string },
+	settings: { fail?: string | undefined },
 	file: string,
 	fallback: (file: string, details: string) => string,
 ): string {
@@ -46,11 +46,7 @@ export function buildFailureReason<C extends BaseConfig>(
 					rule: ruleLabel(rule),
 					checks: details,
 					probability: percent(
-						Math.min(
-							...list.map((check) =>
-								satisfiedProbability(check, probabilities.get(check.name) ?? 0),
-							),
-						),
+						Math.min(...list.map((check) => satisfiedProbability(check, probabilities.get(check.name) ?? 0))),
 					),
 				}),
 			);

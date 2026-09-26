@@ -14,18 +14,35 @@ TypeSafe Jev（System One）で Pi のファイル操作を意味的にチェッ
 ## セットアップ
 
 ```bash
-npm install   # workspace リンクの作成（必須）
-npm test      # 全パッケージのテスト
+npm install          # workspace リンクの作成（必須）
+npm run verify       # 完了条件: biome + tsc + 全テスト + カバレッジ閾値
+npm test             # 全テスト（ルートの契約テストを含む）
 ```
 
+契約テストは `test/contract/`（workspace 依存ポリシー・import 境界・フックのみのツール面）と
+`test/ci/`（各パッケージの npm pack 内容）にある。カバレッジ閾値は `packages/*/test/` の
+実行で計測する。ローカルの git フックは [lefthook](lefthook.yml) が管理し、CI は同じ
+`npm run verify` を Node 22.19 / 24 で実行する。
+
 ## インストール（Pi）
+
+モノレポの root から、両方の拡張をまとめて入れる:
+
+```bash
+pi install git:github.com/kurowashi/pi-jev
+```
+
+ref を固定する場合は `pi install git:github.com/kurowashi/pi-jev@<tag|commit>`。
+
+ローカルの作業コピーで 1 つずつ入れる場合:
 
 ```bash
 pi install /path/to/pi-jev/packages/content-guard
 pi install /path/to/pi-jev/packages/placement-guard
 ```
 
-使い方は各パッケージの README を参照してください。
+使い方は各パッケージの README を参照。git install の入口は root の `package.json` の
+`pi.extensions`（`packages/core` は拡張ではないので列挙しない）。
 
 ## 開発ルール
 
@@ -37,3 +54,4 @@ pi install /path/to/pi-jev/packages/placement-guard
 - **共有しない**: state builder（`buildStateDocument` / `buildPlacementState`）、フック本体、init テンプレート、help/status/context 本文。
   差は `configName` / `state` / `describeState` / `subject` の小さな差し込み口で吸収し、core の中を分岐させない
 - `npm install` は必須（workspace リンクが `@pi-jev/core` の解決経路。無いと拡張のロードに失敗する）
+- フックの有効化は `npx lefthook install` を手動で実行する（`package.json` の lifecycle script には置かない: `pi install git:...` は `npm install --omit=dev` を実行するため、devDependency の lefthook が無い状態で script が走るとインストールごと失敗する）

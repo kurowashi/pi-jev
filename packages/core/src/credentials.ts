@@ -25,15 +25,15 @@ import { hostOf, nonEmpty } from "./util.ts";
 export interface Connection {
 	endpoint: string;
 	model: string;
-	credential?: Credential;
-	error?: string;
+	credential?: Credential | undefined;
+	error?: string | undefined;
 }
 
 /** Resolves the endpoint, model, and credential for the given search directories. */
 export function resolveConnection(settings: BaseSettings, dirs: string[]): Connection {
 	const keys = collectKeys(dirs);
 
-	const endpoint = settings.endpoint ?? nonEmpty(process.env.SYSTEMONE_ENDPOINT) ?? autoEndpoint(keys);
+	const endpoint = settings.endpoint ?? nonEmpty(process.env["SYSTEMONE_ENDPOINT"]) ?? autoEndpoint(keys);
 	const host = hostOf(endpoint);
 	const model = settings.model ?? defaultModelFor(host);
 	const credential = pickCredential(settings, host, keys);
@@ -77,11 +77,7 @@ export function collectKeys(dirs: string[]): Map<string, Credential> {
 	return found;
 }
 
-function pickCredential(
-	settings: BaseSettings,
-	host: string,
-	keys: Map<string, Credential>,
-): Credential | undefined {
+function pickCredential(settings: BaseSettings, host: string, keys: Map<string, Credential>): Credential | undefined {
 	const order: string[] = [];
 	if (settings.apiKeyEnv) order.push(settings.apiKeyEnv);
 	order.push("SYSTEMONE_API_KEY");
@@ -117,6 +113,26 @@ export function readDotEnvValue(startDir: string, name: string): string | undefi
 	}
 }
 
+/** Strip surrounding quotes, or cut a trailing ` # comment`. */
+function unquote(value: string): string {
+	const quoted =
+		value.length >= 2 &&
+		((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")));
+	if (quoted) return value.slice(1, -1);
+	const comment = value.indexOf(" #");
+	return comment >= 0 ? value.slice(0, comment).trim() : value;
+}
+
+/** One `KEY=value` line to an entry, or undefined when the line is not one. */
+function dotEnvEntry(line: string): [string, string] | undefined {
+	const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+	if (!match) return undefined;
+	const [, key, valueText = ""] = match;
+	if (!key) return undefined;
+	const value = unquote(valueText.trim());
+	return value.length > 0 ? [key, value] : undefined;
+}
+
 /** Minimal `.env` reader: KEY=value, optional `export`, quotes, and ` #` comments. */
 export function parseDotEnv(file: string): Record<string, string> {
 	const out: Record<string, string> = {};
@@ -127,20 +143,8 @@ export function parseDotEnv(file: string): Record<string, string> {
 		return out;
 	}
 	for (const line of text.split(/\r?\n/)) {
-		const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
-		if (!match) continue;
-		const key = match[1]!;
-		let value = match[2]!.trim();
-		if (
-			value.length >= 2 &&
-			((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
-		) {
-			value = value.slice(1, -1);
-		} else {
-			const comment = value.indexOf(" #");
-			if (comment >= 0) value = value.slice(0, comment).trim();
-		}
-		if (value.length > 0) out[key] = value;
+		const entry = dotEnvEntry(line);
+		if (entry) out[entry[0]] = entry[1];
 	}
 	return out;
 }

@@ -61,16 +61,16 @@ export interface BaseConfig {
 /** Settings both guards share, resolved from the config chain. */
 export interface BaseSettings {
 	enabled: boolean;
-	endpoint?: string;
-	model?: string;
-	apiKeyEnv?: string;
+	endpoint?: string | undefined;
+	model?: string | undefined;
+	apiKeyEnv?: string | undefined;
 	minProbability: number;
 	onError: OnError;
 	includeFileName: boolean;
 	maxFileChars: number;
 	timeoutMs: number;
-	fail?: string;
-	context?: string;
+	fail?: string | undefined;
+	context?: string | undefined;
 }
 
 export interface LoadedConfig<C = BaseConfig> {
@@ -99,6 +99,4 @@ export interface Credential {
 	source: string;
 }
 
-export type JevOutcome =
-	| { ok: true; probabilities: Map<string, number> }
-	| { ok: false; message: string };
+export type JevOutcome = { ok: true; probabilities: Map<string, number> } | { ok: false; message: string };

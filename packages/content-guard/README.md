@@ -25,6 +25,9 @@ npm install                                # @pi-jev/core の workspace リン�
 pi install /path/to/pi-jev/packages/content-guard  # パッケージとして追加
 ```
 
+git 経由で入れる場合はモノレポの root から `pi install git:github.com/kurowashi/pi-jev`
+（姉妹プラグインの placement-guard も同時に入る）。
+
 `@pi-jev/core` を参照するため、ファイル 1 つを `~/.pi/agent/extensions/` へコピーする使い方はできません。
 
 ## クイックスタート

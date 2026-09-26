@@ -16,8 +16,18 @@ import * as path from "node:path";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
+	ExtensionContext,
 	ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
+import type {
+	BaseConfig,
+	BaseSettings,
+	CommandState,
+	GuardFlavor,
+	JevOutcome,
+	LoadedConfig,
+	PendingCheck,
+} from "@pi-jev/core";
 import {
 	booleanSetting,
 	buildFailureReason,
@@ -55,14 +65,6 @@ import {
 	stringListSetting,
 	toPosix,
 	uniqueDirs,
-} from "@pi-jev/core";
-import type {
-	BaseConfig,
-	BaseSettings,
-	CommandState,
-	GuardFlavor,
-	JevOutcome,
-	LoadedConfig,
 } from "@pi-jev/core";
 
 // Re-exported for the tests that exercise the shared helpers.
@@ -140,12 +142,134 @@ interface ProposedPlacement {
 	file: string;
 	kind: PlacementKind;
 	tree: string;
-	content?: string;
-	note?: string;
+	content?: string | undefined;
+	note?: string | undefined;
 	/** Diagnostics for the command output; the note tells Jev when the tree was cut off. */
 	treeEntries: number;
 	treeTruncated: boolean;
 	treeDepthLimited: boolean;
+}
+
+/** The resolved target for a checked write, or undefined when the call is out of scope. */
+function checkedTarget(
+	event: { toolName: string; input: unknown },
+	ctx: ExtensionContext,
+): { absPath: string; display: string; content: string } | undefined {
+	if (event.toolName !== "write") return undefined;
+	const input = event.input as Record<string, unknown>;
+	const rawPath = input["path"];
+	if (typeof rawPath !== "string" || rawPath.length === 0) return undefined;
+	const content = input["content"];
+	if (typeof content !== "string") return undefined;
+	const absPath = path.resolve(ctx.cwd, rawPath);
+	return { absPath, display: displayPath(absPath, ctx.cwd), content };
+}
+
+/** The config, checks, contexts, and proposed state for one in-scope write. */
+interface PreparedPlacement {
+	settings: ResolvedSettings;
+	checks: PendingCheck<HookConfig>[];
+	contexts: string[];
+	proposed: ProposedPlacement;
+}
+
+function preparePlacement(
+	target: { absPath: string; display: string; content: string },
+	ctx: ExtensionContext,
+	warn: (message: string) => void,
+): PreparedPlacement | undefined {
+	if (!isInside(ctx.cwd, target.absPath)) {
+		warn(`skipping ${target.display}: the file is outside the working directory, so no project tree is available`);
+		return undefined;
+	}
+	const isNew = !fs.existsSync(target.absPath);
+	const config = loadConfig<HookConfig>(CONFIG_NAME, target.absPath, ctx.cwd, ctx.isProjectTrusted(), warn);
+	if (!config) return undefined;
+	const settings = resolveSettings(config);
+	if (!settings.enabled) return undefined;
+	if (!isNew && settings.onlyNewFiles) return undefined;
+	if (isIgnored(config, target.absPath)) return undefined;
+	const matched = matchRules(config, target.absPath, { matchAllWhenNoFiles: true });
+	const checks = collectChecks(matched, settings.minProbability);
+	if (checks.length === 0) return undefined;
+	const targetRel = toPosix(path.relative(ctx.cwd, target.absPath));
+	const proposed = buildPlacementState({
+		file: target.display,
+		kind: isNew ? "new file" : "overwrite",
+		root: ctx.cwd,
+		targetRel,
+		content: target.content,
+		settings,
+	});
+	return { settings, checks, contexts: mergedContexts(settings, matched), proposed };
+}
+
+/** The checks whose probability is below their threshold. */
+function placementFailures(
+	checks: PendingCheck<HookConfig>[],
+	probabilities: Map<string, number>,
+): PendingCheck<HookConfig>[] {
+	return checks.filter(
+		(check) => satisfiedProbability(check, probabilities.get(check.name) ?? 0) < check.minProbability,
+	);
+}
+
+/** The blocked result with the failure text for the model. */
+function placementBlocked(
+	failures: PendingCheck<HookConfig>[],
+	probabilities: Map<string, number>,
+	settings: ResolvedSettings,
+	display: string,
+	ctx: ExtensionContext,
+): ToolCallEventResult {
+	ctx.ui.notify(`${NAME}: blocked ${display} (${failures.length} check(s) failed)`, "warning");
+	return {
+		block: true,
+		reason: buildFailureReason(
+			failures,
+			probabilities,
+			settings,
+			display,
+			(file, details) =>
+				`Jev placement check failed for ${file}:\n${details}\nChoose a directory or file name that fits the existing tree, then retry the write.`,
+		),
+	};
+}
+
+/** Resolve the connection, call Jev, and turn the verdict into a tool result. */
+async function runPlacementCheck(
+	prepared: PreparedPlacement,
+	absPath: string,
+	display: string,
+	ctx: ExtensionContext,
+	warn: (message: string) => void,
+): Promise<ToolCallEventResult | undefined> {
+	const { settings, checks, contexts, proposed } = prepared;
+	const connection = resolveConnection(settings, uniqueDirs([path.dirname(absPath), ctx.cwd]));
+	const credential = connection.credential;
+	if (!credential) {
+		return handleCheckError(settings, ctx, FLAVOR, connection.error ?? "No Jev API key found.", display, warn);
+	}
+	ctx.ui.setStatus(STATUS_KEY, `jev: checking placement ${display}`);
+	let outcome: JevOutcome;
+	try {
+		outcome = await callJev({
+			endpoint: connection.endpoint,
+			model: connection.model,
+			apiKey: credential.value,
+			state: buildStateDocument(proposed, contexts, settings.includeFileName),
+			describeState: describePlacementState(proposed, settings.includeFileName),
+			subject: proposed.kind === "new file" ? "new file" : "the file being overwritten",
+			checks,
+			timeoutMs: settings.timeoutMs,
+		});
+	} finally {
+		ctx.ui.setStatus(STATUS_KEY, undefined);
+	}
+	if (!outcome.ok) return handleCheckError(settings, ctx, FLAVOR, outcome.message, display, warn);
+	const failures = placementFailures(checks, outcome.probabilities);
+	if (failures.length === 0) return undefined;
+	return placementBlocked(failures, outcome.probabilities, settings, display, ctx);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -162,86 +286,12 @@ export default function jevTreeGuard(pi: ExtensionAPI): void {
 
 	pi.on("tool_call", async (event, ctx): Promise<ToolCallEventResult | undefined> => {
 		if (!sessionEnabled || disabledByEnv("JEV_PLACEMENT_GUARD_DISABLE")) return undefined;
-		if (event.toolName !== "write") return undefined;
-
-		const input = event.input as Record<string, unknown>;
-		const rawPath = input.path;
-		if (typeof rawPath !== "string" || rawPath.length === 0) return undefined;
-		if (typeof input.content !== "string") return undefined;
-
-		const absPath = path.resolve(ctx.cwd, rawPath);
-		const display = displayPath(absPath, ctx.cwd);
+		const target = checkedTarget(event, ctx);
+		if (!target) return undefined;
 		const warn = (message: string) => warnings.warn(ctx, message);
-
-		if (!isInside(ctx.cwd, absPath)) {
-			warn(`skipping ${display}: the file is outside the working directory, so no project tree is available`);
-			return undefined;
-		}
-
-		const isNew = !fs.existsSync(absPath);
-
-		const config = loadConfig<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), warn);
-		if (!config) return undefined;
-
-		const settings = resolveSettings(config);
-		if (!settings.enabled) return undefined;
-		if (!isNew && settings.onlyNewFiles) return undefined;
-		if (isIgnored(config, absPath)) return undefined;
-
-		const matched = matchRules(config, absPath, { matchAllWhenNoFiles: true });
-		const checks = collectChecks(matched, settings.minProbability);
-		if (checks.length === 0) return undefined;
-
-		const targetRel = toPosix(path.relative(ctx.cwd, absPath));
-		const proposed = buildPlacementState({
-			file: display,
-			kind: isNew ? "new file" : "overwrite",
-			root: ctx.cwd,
-			targetRel,
-			content: input.content,
-			settings,
-		});
-		const contexts = mergedContexts(settings, matched);
-
-		const connection = resolveConnection(settings, uniqueDirs([path.dirname(absPath), ctx.cwd]));
-		if (!connection.credential) {
-			return handleCheckError(settings, ctx, FLAVOR, connection.error ?? "No Jev API key found.", display, warn);
-		}
-
-		ctx.ui.setStatus(STATUS_KEY, `jev: checking placement ${display}`);
-		let outcome: JevOutcome;
-		try {
-			outcome = await callJev({
-				endpoint: connection.endpoint,
-				model: connection.model,
-				apiKey: connection.credential.value,
-				state: buildStateDocument(proposed, contexts, settings.includeFileName),
-				describeState: describePlacementState(proposed, settings.includeFileName),
-				subject: proposed.kind === "new file" ? "new file" : "the file being overwritten",
-				checks,
-				timeoutMs: settings.timeoutMs,
-			});
-		} finally {
-			ctx.ui.setStatus(STATUS_KEY, undefined);
-		}
-
-		if (!outcome.ok) {
-			return handleCheckError(settings, ctx, FLAVOR, outcome.message, display, warn);
-		}
-
-		const failures = checks.filter(
-			(check) =>
-				satisfiedProbability(check, outcome.probabilities.get(check.name) ?? 0) < check.minProbability,
-		);
-		if (failures.length === 0) return undefined;
-
-		ctx.ui.notify(`${NAME}: blocked ${display} (${failures.length} check(s) failed)`, "warning");
-		return {
-			block: true,
-			reason: buildFailureReason(failures, outcome.probabilities, settings, display, (file, details) =>
-				`Jev placement check failed for ${file}:\n${details}\nChoose a directory or file name that fits the existing tree, then retry the write.`,
-			),
-		};
+		const prepared = preparePlacement(target, ctx, warn);
+		if (!prepared) return undefined;
+		return await runPlacementCheck(prepared, target.absPath, target.display, ctx, warn);
 	});
 
 	const commandHandler = async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
@@ -301,11 +351,7 @@ function resolveSettings(config: LoadedConfig<HookConfig> | undefined): Resolved
  * Formats the Jev state as one document: the merged context, the target path,
  * the project tree, and the proposed file content.
  */
-function buildStateDocument(
-	proposed: ProposedPlacement,
-	contexts: string[],
-	includeFileName: boolean,
-): string {
+function buildStateDocument(proposed: ProposedPlacement, contexts: string[], includeFileName: boolean): string {
 	const sections: string[] = [];
 	if (contexts.length > 0) sections.push(contexts.join("\n\n"));
 	if (includeFileName) {
@@ -323,13 +369,13 @@ function buildStateDocument(
 
 export interface TreeRenderOptions {
 	/** Maximum number of entries rendered (default 400). */
-	maxEntries?: number;
+	maxEntries?: number | undefined;
 	/** Maximum directory depth (default 5). Directories on the target file's path are always descended. */
-	maxDepth?: number;
+	maxDepth?: number | undefined;
 	/** Glob(s) relative to `root` hidden from the tree. Prefix with `!` to un-ignore. */
-	ignore?: string[];
+	ignore?: string[] | undefined;
 	/** Relative path hidden from the listing (used when dry-running an existing file as if it were new). */
-	exclude?: string;
+	exclude?: string | undefined;
 }
 
 export interface RenderedTree {
@@ -346,6 +392,161 @@ export interface RenderedTree {
 	createdDirs: string[];
 }
 
+interface TreeEntry {
+	name: string;
+	virtual?: boolean;
+}
+
+/** Read a directory, treating an unreadable one as empty. */
+function readDirents(dirAbs: string): fs.Dirent[] {
+	try {
+		return fs.readdirSync(dirAbs, { withFileTypes: true });
+	} catch {
+		return [];
+	}
+}
+
+/** One ignore pattern: true ignores, false re-includes, undefined does not match. */
+function ignoreVerdict(raw: unknown, rel: string, isDir: boolean): boolean | undefined {
+	if (typeof raw !== "string" || raw.length === 0) return undefined;
+	const negated = raw.startsWith("!");
+	const pattern = negated ? raw.slice(1) : raw;
+	if (pattern.length === 0) return undefined;
+	const targetPath = pattern.includes("/") ? rel : path.posix.basename(rel);
+	const regexp = globToRegExp(pattern);
+	const hit = regexp.test(targetPath) || (isDir && regexp.test(`${targetPath}/`));
+	if (!hit) return undefined;
+	return !negated;
+}
+
+/** Ignore globs with `!` re-includes; a later match wins. */
+function pathIgnored(rel: string, isDir: boolean, ignore: string[]): boolean {
+	let ignored = false;
+	for (const raw of ignore) {
+		const verdict = ignoreVerdict(raw, rel, isDir);
+		if (verdict === undefined) continue;
+		if (!verdict) return false;
+		ignored = true;
+	}
+	return ignored;
+}
+
+/** The visible dirs and files of one directory. */
+function visibleEntry(
+	dirRel: string,
+	dirent: fs.Dirent,
+	options: { exclude: string | undefined; ignore: string[] },
+): { kind: "dir" | "item"; name: string } | undefined {
+	const rel = dirRel === "." ? dirent.name : `${dirRel}/${dirent.name}`;
+	if (options.exclude !== undefined && rel === options.exclude) return undefined;
+	if (dirent.isDirectory()) {
+		return pathIgnored(rel, true, options.ignore) ? undefined : { kind: "dir", name: dirent.name };
+	}
+	if (!dirent.isFile() && !dirent.isSymbolicLink()) return undefined;
+	return pathIgnored(rel, false, options.ignore) ? undefined : { kind: "item", name: dirent.name };
+}
+
+/** The visible dirs and files of one directory. */
+function visibleChildren(
+	dirRel: string,
+	dirents: fs.Dirent[],
+	options: { exclude: string | undefined; ignore: string[] },
+): { dirs: TreeEntry[]; items: TreeEntry[] } {
+	const dirs: TreeEntry[] = [];
+	const items: TreeEntry[] = [];
+	for (const dirent of dirents) {
+		const entry = visibleEntry(dirRel, dirent, options);
+		if (!entry) continue;
+		if (entry.kind === "dir") dirs.push({ name: entry.name });
+		else items.push({ name: entry.name });
+	}
+	return { dirs, items };
+}
+
+/** Virtual (new) entries first, then alphabetical. */
+function compareTreeEntries(a: TreeEntry, b: TreeEntry): number {
+	return Number(Boolean(b.virtual)) - Number(Boolean(a.virtual)) || a.name.localeCompare(b.name);
+}
+
+/** Mutable state of one tree walk; module scope keeps each helper's complexity isolated. */
+interface TreeWalk {
+	root: string;
+	exclude: string | undefined;
+	ignore: string[];
+	maxEntries: number;
+	maxDepth: number;
+	focusDir: string;
+	targetName: string;
+	lines: string[];
+	createdDirs: string[];
+	entries: number;
+	directories: number;
+	files: number;
+	truncated: boolean;
+	depthLimited: boolean;
+}
+
+function onFocusPath(state: TreeWalk, rel: string): boolean {
+	return rel === "." || state.focusDir === rel || state.focusDir.startsWith(`${rel}/`);
+}
+
+function addVirtualDir(state: TreeWalk, dirRel: string, dirs: TreeEntry[]): void {
+	const rest = dirRel === "." ? state.focusDir : state.focusDir.slice(dirRel.length + 1);
+	const next = rest.split("/")[0] ?? "";
+	if (next.length === 0 || dirs.some((dir) => dir.name === next)) return;
+	dirs.unshift({ name: next, virtual: true });
+	state.createdDirs.push(dirRel === "." ? next : `${dirRel}/${next}`);
+}
+
+function addVirtualFile(state: TreeWalk, dirRel: string, items: TreeEntry[]): void {
+	if (dirRel === state.focusDir && !items.some((item) => item.name === state.targetName)) {
+		items.unshift({ name: state.targetName, virtual: true });
+	}
+}
+
+function emitItem(state: TreeWalk, item: TreeEntry, indent: string): void {
+	if (state.entries >= state.maxEntries && !item.virtual) {
+		state.truncated = true;
+		return;
+	}
+	state.entries++;
+	state.files++;
+	state.lines.push(`${indent}${item.name}${item.virtual ? " (new)" : ""}`);
+}
+
+function emitDir(state: TreeWalk, dirRel: string, depth: number, dir: TreeEntry, indent: string): void {
+	const rel = dirRel === "." ? dir.name : `${dirRel}/${dir.name}`;
+	const focus = onFocusPath(state, rel);
+	if (state.entries >= state.maxEntries && !dir.virtual && !focus) {
+		state.truncated = true;
+		return;
+	}
+	state.entries++;
+	state.directories++;
+	state.lines.push(`${indent}${dir.name}/${dir.virtual ? " (new dir)" : ""}`);
+	const descend = dir.virtual === true || depth + 1 < state.maxDepth || focus;
+	if (!descend) {
+		state.depthLimited = true;
+		return;
+	}
+	walkTree(state, rel, depth + 1);
+}
+
+function walkTree(state: TreeWalk, dirRel: string, depth: number): void {
+	const dirAbs = dirRel === "." ? state.root : path.join(state.root, dirRel);
+	const { dirs, items } = visibleChildren(dirRel, readDirents(dirAbs), {
+		exclude: state.exclude,
+		ignore: state.ignore,
+	});
+	if (onFocusPath(state, dirRel) && dirRel !== state.focusDir) addVirtualDir(state, dirRel, dirs);
+	if (dirRel === state.focusDir) addVirtualFile(state, dirRel, items);
+	dirs.sort(compareTreeEntries);
+	items.sort(compareTreeEntries);
+	const indent = "  ".repeat(depth + 1);
+	for (const dir of dirs) emitDir(state, dirRel, depth, dir, indent);
+	for (const item of items) emitItem(state, item, indent);
+}
+
 /**
  * Renders a bounded, ignore-aware view of the existing tree rooted at `root`.
  * The target file is marked `(new)` inside its directory, and missing
@@ -353,108 +554,34 @@ export interface RenderedTree {
  * always rendered even when the entry budget or depth limit is reached.
  */
 export function renderTree(root: string, targetRel: string, options: TreeRenderOptions = {}): RenderedTree {
-	const maxEntries = options.maxEntries ?? DEFAULT_MAX_TREE_ENTRIES;
-	const maxDepth = options.maxDepth ?? DEFAULT_MAX_TREE_DEPTH;
-	const ignore = options.ignore ?? [];
-	const exclude = options.exclude === undefined ? undefined : normalizeRel(options.exclude);
-
 	const target = normalizeRel(targetRel);
-	const targetName = path.posix.basename(target);
-	const focusDir = normalizeRel(path.posix.dirname(target));
-
-	const lines: string[] = ["./"];
-	const createdDirs: string[] = [];
-	let entries = 0;
-	let directories = 0;
-	let files = 0;
-	let truncated = false;
-	let depthLimited = false;
-
-	const onFocusPath = (rel: string): boolean =>
-		rel === "." || focusDir === rel || focusDir.startsWith(`${rel}/`);
-
-	const isIgnoredPath = (rel: string, isDir: boolean): boolean => {
-		let ignored = false;
-		for (const raw of ignore) {
-			if (typeof raw !== "string" || raw.length === 0) continue;
-			const negated = raw.startsWith("!");
-			const pattern = negated ? raw.slice(1) : raw;
-			if (pattern.length === 0) continue;
-			const targetPath = pattern.includes("/") ? rel : path.posix.basename(rel);
-			const regexp = globToRegExp(pattern);
-			const hit = regexp.test(targetPath) || (isDir && regexp.test(`${targetPath}/`));
-			if (!hit) continue;
-			if (negated) return false;
-			ignored = true;
-		}
-		return ignored;
+	const state: TreeWalk = {
+		root,
+		exclude: options.exclude === undefined ? undefined : normalizeRel(options.exclude),
+		ignore: options.ignore ?? [],
+		maxEntries: options.maxEntries ?? DEFAULT_MAX_TREE_ENTRIES,
+		maxDepth: options.maxDepth ?? DEFAULT_MAX_TREE_DEPTH,
+		focusDir: normalizeRel(path.posix.dirname(target)),
+		targetName: path.posix.basename(target),
+		lines: ["./"],
+		createdDirs: [],
+		entries: 0,
+		directories: 0,
+		files: 0,
+		truncated: false,
+		depthLimited: false,
 	};
-
-	const walk = (dirRel: string, depth: number): void => {
-		const dirAbs = dirRel === "." ? root : path.join(root, dirRel);
-		let dirents: fs.Dirent[] = [];
-		try {
-			dirents = fs.readdirSync(dirAbs, { withFileTypes: true });
-		} catch {
-			dirents = [];
-		}
-
-		const dirs: Array<{ name: string; virtual?: boolean }> = [];
-		const items: Array<{ name: string; virtual?: boolean }> = [];
-		for (const dirent of dirents) {
-			const rel = dirRel === "." ? dirent.name : `${dirRel}/${dirent.name}`;
-			if (exclude !== undefined && rel === exclude) continue;
-			if (dirent.isDirectory()) {
-				if (!isIgnoredPath(rel, true)) dirs.push({ name: dirent.name });
-			} else if (dirent.isFile() || dirent.isSymbolicLink()) {
-				if (!isIgnoredPath(rel, false)) items.push({ name: dirent.name });
-			}
-		}
-
-		if (onFocusPath(dirRel) && dirRel !== focusDir) {
-			const rest = dirRel === "." ? focusDir : focusDir.slice(dirRel.length + 1);
-			const next = rest.split("/")[0] ?? "";
-			if (next.length > 0 && !dirs.some((dir) => dir.name === next)) {
-				dirs.unshift({ name: next, virtual: true });
-				createdDirs.push(dirRel === "." ? next : `${dirRel}/${next}`);
-			}
-		}
-		if (dirRel === focusDir && !items.some((item) => item.name === targetName)) {
-			items.unshift({ name: targetName, virtual: true });
-		}
-
-		const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
-		dirs.sort((a, b) => Number(Boolean(b.virtual)) - Number(Boolean(a.virtual)) || byName(a, b));
-		items.sort((a, b) => Number(Boolean(b.virtual)) - Number(Boolean(a.virtual)) || byName(a, b));
-
-		const indent = "  ".repeat(depth + 1);
-		for (const dir of dirs) {
-			const rel = dirRel === "." ? dir.name : `${dirRel}/${dir.name}`;
-			const focus = onFocusPath(rel);
-			if (entries >= maxEntries && !dir.virtual && !focus) {
-				truncated = true;
-				continue;
-			}
-			entries++;
-			directories++;
-			lines.push(`${indent}${dir.name}/${dir.virtual ? " (new dir)" : ""}`);
-			const descend = dir.virtual || depth + 1 < maxDepth || focus;
-			if (!descend) depthLimited = true;
-			if (descend) walk(rel, depth + 1);
-		}
-		for (const item of items) {
-			if (entries >= maxEntries && !item.virtual) {
-				truncated = true;
-				continue;
-			}
-			entries++;
-			files++;
-			lines.push(`${indent}${item.name}${item.virtual ? " (new)" : ""}`);
-		}
+	walkTree(state, ".", 0);
+	return {
+		text: state.lines.join("\n"),
+		entries: state.entries,
+		directories: state.directories,
+		files: state.files,
+		truncated: state.truncated,
+		depthLimited: state.depthLimited,
+		focusDir: state.focusDir,
+		createdDirs: state.createdDirs,
 	};
-
-	walk(".", 0);
-	return { text: lines.join("\n"), entries, directories, files, truncated, depthLimited, focusDir, createdDirs };
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -466,8 +593,8 @@ interface PlacementInput {
 	kind: PlacementKind;
 	root: string;
 	targetRel: string;
-	content?: string;
-	exclude?: string;
+	content?: string | undefined;
+	exclude?: string | undefined;
 	settings: ResolvedSettings;
 }
 
@@ -507,10 +634,9 @@ function buildPlacementState(input: PlacementInput): ProposedPlacement {
 
 /** One-line tree summary for the command output, including why it was cut off. */
 function treeSummary(proposed: ProposedPlacement): string {
-	const flags = [
-		proposed.treeTruncated ? "truncated" : "",
-		proposed.treeDepthLimited ? "depth limited" : "",
-	].filter((flag) => flag.length > 0);
+	const flags = [proposed.treeTruncated ? "truncated" : "", proposed.treeDepthLimited ? "depth limited" : ""].filter(
+		(flag) => flag.length > 0,
+	);
 	return `tree: ${proposed.treeEntries} entries${flags.length > 0 ? ` (${flags.join(", ")})` : ""}`;
 }
 
@@ -614,7 +740,10 @@ function initConfig(ctx: ExtensionCommandContext): void {
 		ctx.ui.notify(`jev-placement-guard: could not write ${target}: ${message(error)}`, "error");
 		return;
 	}
-	ctx.ui.notify(`jev-placement-guard: wrote ${target}. Edit the rules, then run /jev-placement-guard check <file>.`, "info");
+	ctx.ui.notify(
+		`jev-placement-guard: wrote ${target}. Edit the rules, then run /jev-placement-guard check <file>.`,
+		"info",
+	);
 }
 
 async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -722,6 +851,87 @@ async function dryRun(arg: string, ctx: ExtensionCommandContext): Promise<void> 
  * without calling Jev. With a file it resolves the merged request; without a
  * file it shows the global context of each config.
  */
+/** Config load for the context command: a target file or the working directory. */
+function placementContextConfig(
+	absPath: string | undefined,
+	ctx: ExtensionCommandContext,
+): LoadedConfig<HookConfig> | undefined {
+	const warn = (warning: string) => ctx.ui.notify(`${NAME}: ${warning}`, "warning");
+	if (absPath === undefined) {
+		return loadConfigFromDir<HookConfig>(CONFIG_NAME, ctx.cwd, ctx.cwd, ctx.isProjectTrusted(), warn);
+	}
+	return loadConfig<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), warn);
+}
+
+/** The file's whole content when readable, so the preview shows a realistic write. */
+function previewContent(absPath: string): string | undefined {
+	try {
+		if (fs.statSync(absPath).isFile()) return fs.readFileSync(absPath, "utf8");
+	} catch {
+		// The file does not exist yet: show the tree and path without content.
+	}
+	return undefined;
+}
+
+/** The merged request preview for one file. */
+function appendPlacementContext(
+	lines: string[],
+	absPath: string,
+	display: string,
+	config: LoadedConfig<HookConfig> | undefined,
+	settings: ResolvedSettings,
+	cwd: string,
+): void {
+	lines.push(
+		`file line: ${settings.includeFileName ? `file: ${display} (new)` : "(disabled by includeFileName: false)"}`,
+		"",
+	);
+	if (isIgnored(config, absPath)) {
+		lines.push(`ignored by ${CONFIG_NAME}: no Jev request is sent for this file.`);
+		return;
+	}
+	const sending = matchRules(config, absPath, { matchAllWhenNoFiles: true }).filter(
+		(rule) => normalizeChecks(rule.rule, settings.minProbability).length > 0,
+	);
+	if (sending.length === 0) {
+		lines.push("no checks apply to this file: no Jev request is sent.");
+		return;
+	}
+	const contexts = mergedContexts(settings, sending);
+	lines.push(`rules merged into one request: ${sending.length} — ${sending.map((rule) => ruleLabel(rule)).join(", ")}`);
+	if (contexts.length === 0) {
+		lines.push("merged context: (none)");
+	} else {
+		lines.push(`merged context (${contexts.length} part(s)):`, ...displayBlock(contexts.join("\n\n")));
+	}
+	const targetRel = toPosix(path.relative(cwd, absPath));
+	const proposed = buildPlacementState({
+		file: display,
+		kind: "new file",
+		root: cwd,
+		targetRel,
+		content: previewContent(absPath),
+		exclude: targetRel,
+		settings,
+	});
+	lines.push(
+		treeSummary(proposed),
+		"",
+		"state sent to Jev (as a new file):",
+		...displayBlock(buildStateDocument(proposed, contexts, settings.includeFileName)),
+	);
+}
+
+function normalizeRel(value: string): string {
+	const posix = toPosix(value).replace(/\/+$/, "").replace(/^\.\//, "");
+	return posix.length === 0 ? "." : posix;
+}
+
+/**
+ * Shows the context and the exact state document a check would send to Jev,
+ * without calling Jev. With a file it resolves the merged request; without a
+ * file it shows the global context of each config.
+ */
 function showContext(arg: string, ctx: ExtensionCommandContext): void {
 	const target = arg.trim();
 	const absPath = target.length > 0 ? path.resolve(ctx.cwd, target) : undefined;
@@ -731,13 +941,8 @@ function showContext(arg: string, ctx: ExtensionCommandContext): void {
 	}
 
 	const display = absPath === undefined ? undefined : displayPath(absPath, ctx.cwd);
-	const warn = (warning: string) => ctx.ui.notify(`jev-placement-guard: ${warning}`, "warning");
-	const config =
-		absPath === undefined
-			? loadConfigFromDir<HookConfig>(CONFIG_NAME, ctx.cwd, ctx.cwd, ctx.isProjectTrusted(), warn)
-			: loadConfig<HookConfig>(CONFIG_NAME, absPath, ctx.cwd, ctx.isProjectTrusted(), warn);
+	const config = placementContextConfig(absPath, ctx);
 	const settings = resolveSettings(config);
-
 	const lines: string[] = [
 		display === undefined ? "jev-placement-guard context" : `jev-placement-guard context: ${display}`,
 		config ? `config: ${config.file} — ${ruleCount(config)} rule(s)` : "config: none",
@@ -749,60 +954,8 @@ function showContext(arg: string, ctx: ExtensionCommandContext): void {
 	if (display === undefined || absPath === undefined) {
 		lines.push("", `Rules need a target file: run ${CONTEXT_COMMAND} <file> to see the merged request state.`);
 	} else {
-		lines.push(
-			`file line: ${settings.includeFileName ? `file: ${display} (new)` : "(disabled by includeFileName: false)"}`,
-			"",
-		);
-		if (isIgnored(config, absPath)) {
-			lines.push(`ignored by ${CONFIG_NAME}: no Jev request is sent for this file.`);
-		} else {
-			const sending = matchRules(config, absPath, { matchAllWhenNoFiles: true }).filter(
-				(rule) => normalizeChecks(rule.rule, settings.minProbability).length > 0,
-			);
-			if (sending.length === 0) {
-				lines.push("no checks apply to this file: no Jev request is sent.");
-			} else {
-				const contexts = mergedContexts(settings, sending);
-				lines.push(
-					`rules merged into one request: ${sending.length} — ${sending.map((rule) => ruleLabel(rule)).join(", ")}`,
-				);
-				if (contexts.length === 0) {
-					lines.push("merged context: (none)");
-				} else {
-					lines.push(`merged context (${contexts.length} part(s)):`, ...displayBlock(contexts.join("\n\n")));
-				}
-
-				let content: string | undefined;
-				try {
-					if (fs.statSync(absPath).isFile()) content = fs.readFileSync(absPath, "utf8");
-				} catch {
-					// The file does not exist yet: show the tree and path without content.
-				}
-				const targetRel = toPosix(path.relative(ctx.cwd, absPath));
-				const proposed = buildPlacementState({
-					file: display,
-					kind: "new file",
-					root: ctx.cwd,
-					targetRel,
-					content,
-					exclude: targetRel,
-					settings,
-				});
-				lines.push(
-					treeSummary(proposed),
-					"",
-					"state sent to Jev (as a new file):",
-					...displayBlock(buildStateDocument(proposed, contexts, settings.includeFileName)),
-				);
-			}
-		}
+		appendPlacementContext(lines, absPath, display, config, settings, ctx.cwd);
 	}
 
 	ctx.ui.notify(lines.join("\n"), "info");
 }
-
-function normalizeRel(value: string): string {
-	const posix = toPosix(value).replace(/\/+$/, "").replace(/^\.\//, "");
-	return posix.length === 0 ? "." : posix;
-}
-
