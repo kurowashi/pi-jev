@@ -1,7 +1,7 @@
 # AGENTS.md — pi-jev で作業するエージェント向けの指示
 
 読者は pi-jev を変更する AI エージェントと開発者です。利用者向けの仕様は root と各パッケージの
-README に書きます。
+README に、設計の判断基準は DESIGN.md と PHILOSOPHY.md(このプラグイン群共通)に書きます。
 
 ここには、壊してはいけない制約と、制約に触れる変更の手順だけを書きます。制約の正はテストで、
 下表はその索引です。実装と表が食い違った場合はテストが正です。検証手段を併記できないものは
@@ -50,9 +50,7 @@ README に書きます。
   `@pi-jev/*` のみ。
 - root の `.jev-content-guard.json` / `.jev-placement-guard.json` はこのリポジトリ自身への
   適用設定(dogfooding)であり、編集すると以後のチェック内容が変わる。
-- 自動テストにできない設計規約(`packages/core` は Pi に依存しない、core は配管のみで
-  ポリシーを持たない、state builder や hook 本体などを共有しない)の正は root README の
-  「開発ルール」とする。ここには重複して書かない。
+- 自動テストにできない設計規約の正は DESIGN.md とする。ここには重複して書かない。
 - カバレッジは `packages/*/test` で計測する(`package.json` の `test:coverage`)。root の
   契約テストは jiti 経由で `src` をもう一度ロードするため、同じファイルが2実体として数えられる。
 
