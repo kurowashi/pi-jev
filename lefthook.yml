@@ -6,7 +6,7 @@ pre-commit:
   jobs:
     - name: format-and-lint
       # --staged plus stage_fixed keeps lint-staged out of the dependency tree.
-      run: npx biome check --write --staged
+      run: npx biome check --write --staged --no-errors-on-unmatched
       stage_fixed: true
     - name: typecheck
       run: npx tsc --noEmit
