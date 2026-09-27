@@ -82,6 +82,11 @@ README に、設計の判断基準は DESIGN.md と PHILOSOPHY.md(このプラ�
 - root の `.jev-content-guard.json` / `.jev-placement-guard.json` はこのリポジトリ自身に適用する
   検証設定です。編集すると以後のチェック内容が変わります。
 - 自動テストにできない設計規約の正は DESIGN.md。ここには重複して書かない。
+- 決定の記録は `docs/adr/` に置く(1決定 = 1ファイル、`NNNN-<topic>.md`)。追加するのは、却下した
+  代替を再提案されうる決定、機能や振る舞いを削除・置き換える決定、DESIGN.md / PHILOSOPHY.md に
+  触れる決定のときだけ。却下案は結果ではなく理由を書く。
+- ツール・コマンド・設定・公開の振る舞いを変える前に `docs/adr/` を読み、却下済みの代替を
+  再提案しない。決定が変わったら同じコミットで状態を更新する(採用 → 廃止)。
 - フックの有効化は `npx lefthook install` を手動で行います(`package.json` の lifecycle script には
   置きません: `pi install git:...` は `npm install --omit=dev` を実行するため、devDependency の
   lefthook が無い状態で script が走るとインストールごと失敗します)。
