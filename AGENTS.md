@@ -1,11 +1,11 @@
 # AGENTS.md — pi-jev で作業するエージェント向けの指示
 
-読者は pi-jev を変更する AI エージェントと開発者です。利用者向けの仕様は root と各パッケージの
-README に、設計の判断基準は DESIGN.md と PHILOSOPHY.md(このプラグイン群共通)に書きます。
+読者は pi-jev を変更する AI エージェントと開発者です。利用者向けの仕様は root と各パッケージの README に、
+設計の判断基準は DESIGN.md と PHILOSOPHY.md(このプラグイン群共通)に書きます。
 
 ここには、壊してはいけない制約と、制約に触れる変更の手順だけを書きます。制約の正はテストで、
-下の表はその索引です。実装と表が食い違った場合はテストが正です。検証手段を併記できないものは
-制約として書かず、自動テストできない範囲は末尾に分けます。
+下の表はその索引です。実装と表が食い違った場合はテストが正です。検証手段を併記できないものは制約として書かず、
+自動テストできない範囲は末尾に分けます。
 
 ## 完了条件
 
@@ -13,8 +13,8 @@ README に、設計の判断基準は DESIGN.md と PHILOSOPHY.md(このプラ�
 フックが通っても CI が通らなければ未完了。CI は同じ `verify` を Node 22.19 / 24 で実行します。
 `npm install` で workspace リンク(`@pi-jev/core`)を張っておくこと。
 
-契約テストは `test/contract/`(依存ポリシー・import 境界・フックのみのツール面)と `test/ci/`
-(各パッケージの npm pack 内容)にあり、カバレッジは `packages/*/test/` の実行で計測します。
+契約テストは `test/contract/`(依存ポリシー・import 境界・フックのみのツール面)と `test/ci/` (各パッケージの npm pack 内容)にあり、
+カバレッジは `packages/*/test/` の実行で計測します。
 下の表の「検証」列は個別の検証箇所であり、自動検証はすべて `verify` に含まれます。
 
 ## 制約
@@ -72,39 +72,38 @@ README に、設計の判断基準は DESIGN.md と PHILOSOPHY.md(このプラ�
 
 ## 変更時の手順
 
-- パッケージを増やす場合は `test/contract/dependencies.test.ts` と `test/ci/tarball.test.ts` の
-  `PACKAGE_DIRS` を更新し、拡張なら root `package.json` の `pi.extensions` にも追加する。
-- `packages/core` の共有配管を変える場合は両ガードのテストを実行する。ガードごとの差は
-  `FLAVOR` と設定の差し込み口で吸収し、core にガード固有の分岐を足さない。
-- 依存を追加する場合は root の devDependency のみ可能(`ROOT_DEV_ALLOWED` の更新と
-  コミットメッセージの理由をセットで行う)。パッケージの実行時依存は workspace の
-  `@pi-jev/*` のみ。
-- root の `.jev-content-guard.json` / `.jev-placement-guard.json` はこのリポジトリ自身に適用する
-  検証設定です。編集すると以後のチェック内容が変わります。
+- パッケージを増やす場合は `test/contract/dependencies.test.ts` と `test/ci/tarball.test.ts` の `PACKAGE_DIRS` を更新し、
+  拡張なら root `package.json` の `pi.extensions` にも追加する。
+- `packages/core` の共有配管を変える場合は両ガードのテストを実行する。
+  ガードごとの差は `FLAVOR` と設定の差し込み口で吸収し、core にガード固有の分岐を足さない。
+- 依存を追加する場合は root の devDependency のみ可能(`ROOT_DEV_ALLOWED` の更新とコミットメッセージの理由をセットで行う)。
+  パッケージの実行時依存は workspace の `@pi-jev/*` のみ。
+- root の `.jev-content-guard.json` / `.jev-placement-guard.json` はこのリポジトリ自身に適用する検証設定です。
+  編集すると以後のチェック内容が変わります。
 - 自動テストにできない設計規約の正は DESIGN.md。ここには重複して書かない。
-- 決定の記録は `docs/adr/` に置く(1決定 = 1ファイル、`NNNN-<topic>.md`)。追加するのは、却下した
-  代替を再提案されうる決定、機能や振る舞いを削除・置き換える決定、DESIGN.md / PHILOSOPHY.md に
-  触れる決定のときだけ。却下案は結果ではなく理由を書く。
-- ツール・コマンド・設定・公開の振る舞いを変える前に `docs/adr/` を読み、却下済みの代替を
-  再提案しない。決定が変わったら同じコミットで状態を更新する(採用 → 廃止)。
-- フックの有効化は `npx lefthook install` を手動で行います(`package.json` の lifecycle script には
-  置きません: `pi install git:...` は `npm install --omit=dev` を実行するため、devDependency の
-  lefthook が無い状態で script が走るとインストールごと失敗します)。
-- カバレッジの数値は契約テストの影響を受けます。root の契約テストは jiti 経由で `src` をもう一度
-  ロードするため、同じファイルが2実体として数えられます。
+- 決定の記録は `docs/adr/` に置く(1決定 = 1ファイル、`NNNN-<topic>.md`)。追加するのは、
+  却下した代替を再提案されうる決定、機能や振る舞いを削除・置き換える決定、DESIGN.md / PHILOSOPHY.md に触れる決定のときだけ。
+  却下案は結果ではなく理由を書く。
+- ツール・コマンド・設定・公開の振る舞いを変える前に `docs/adr/` を読み、却下済みの代替を再提案しない。
+  決定が変わったら同じコミットで状態を更新する(採用 → 廃止)。
+- フックの有効化は `npx lefthook install` を手動で行います(`package.json` の lifecycle script には置きません:
+  `pi install git:...` は `npm install --omit=dev` を実行するため、
+  devDependency の lefthook が無い状態で script が走るとインストールごと失敗します)。
+- カバレッジの数値は契約テストの影響を受けます。root の契約テストは jiti 経由で `src` をもう一度ロードするため、
+  同じファイルが2実体として数えられます。
 
 ## 手動確認項目(自動検証の対象外)
 
-Jev API はモックでテストしているため、実際の Jev との接続はここで確認します。前提: Jev の
-API キー(環境変数または `.env`)を用意し、チェック対象のリポジトリで作業します。
+Jev API はモックでテストしているため、実際の Jev との接続はここで確認します。前提:
+Jev の API キー(環境変数または `.env`)を用意し、チェック対象のリポジトリで作業します。
 
-1. content-guard: 実 Jev で不合格になる `edit` がブロックされ `fail` 文言が返ること。合格する
-   `edit` は通ること。
-2. placement-guard: 配置ルールに違反する新規 `write` がブロックされること。既存ファイルの上書きは
-   既定で通ること。
+1. content-guard: 実 Jev で不合格になる `edit` がブロックされ `fail` 文言が返ること。
+   合格する `edit` は通ること。
+2. placement-guard: 配置ルールに違反する新規 `write` がブロックされること。
+   既存ファイルの上書きは既定で通ること。
 3. 併用時、新規 `write` が内容と配置の2リクエストになること。
-4. Jev への接続を失敗させた状態で、`onError: "block"` なら `edit` / `write` が止まり、既定の
-   `"allow"` なら通ること。
+4. Jev への接続を失敗させた状態で、`onError: "block"` なら `edit` / `write` が止まり、
+   既定の `"allow"` なら通ること。
 5. 環境変数 → `.env` の順に解決し、キーの種類に応じて endpoint が自動選択されること。
 6. TUI で各ガードの `init` / `check` / `context` / `on` / `off` が動くこと。
 7. 未信頼プロジェクトでは設定が無視されること。

@@ -35,8 +35,8 @@ pi install /path/to/pi-jev/packages/content-guard
 pi install /path/to/pi-jev/packages/placement-guard
 ```
 
-ローカルの作業コピーを使う場合は、先に root で `npm install` を実行して workspace リンク
-（`@pi-jev/core`）を作成します。git install では不要です。
+ローカルの作業コピーを使う場合は、先に root で `npm install` を実行して workspace リンク（`@pi-jev/core`）を作成します。
+git install では不要です。
 
 使い方は各パッケージの README を参照。
 

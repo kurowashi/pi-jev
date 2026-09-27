@@ -4,9 +4,9 @@
 既存のツリーとこれから追加するファイルを Jev に渡し、「その場所・その名前でよいか」を判定します。
 合格しない作成は実行前にブロックし、`fail` に書いた文字列をモデルへ返します。
 
-編集内容のチェックは姉妹プラグイン `pi-jev-content-guard` が担当します。併用する場合、`edit` は
-`pi-jev-content-guard` だけが、新規 `write` は `pi-jev-content-guard`（内容）とこのプラグイン（配置）の
-両方がチェックします。入力も context も異なるため、リクエストは 2 つに分かれます。
+編集内容のチェックは姉妹プラグイン `pi-jev-content-guard` が担当します。併用する場合、
+`edit` は `pi-jev-content-guard` だけが、新規 `write` は `pi-jev-content-guard`（内容）とこのプラグイン（配置）の両方がチェックします。
+入力も context も異なるため、リクエストは 2 つに分かれます。
 
 ## 動作の流れ
 
@@ -30,8 +30,7 @@ npm install                                     # @pi-jev/core の workspace リ
 pi install /path/to/pi-jev/packages/placement-guard  # パッケージとして追加
 ```
 
-git 経由で入れる場合はモノレポの root から `pi install git:github.com/kurowashi/pi-jev`
-（姉妹プラグインの content-guard も同時に入る）。
+git 経由で入れる場合はモノレポの root から `pi install git:github.com/kurowashi/pi-jev`（姉妹プラグインの content-guard も同時に入る）。
 
 `@pi-jev/core` を参照するため、ファイル 1 つを `~/.pi/agent/extensions/` へコピーする使い方はできません。
 
@@ -41,8 +40,8 @@ git 経由で入れる場合はモノレポの root から `pi install git:githu
 2. `context` にディレクトリ構成と命名規則を書き、ルールを書く
 3. `/jev-placement-guard check src/features/auth/login.ts` で結果を確認する
 
-`check` は対象が存在しなくても、既に存在していても実行できます。既存ファイルは
-「新規作成するつもり」としてツリーから除いて判定するため、配置の見直しにも使えます。
+`check` は対象が存在しなくても、既に存在していても実行できます。
+既存ファイルは「新規作成するつもり」としてツリーから除いて判定するため、配置の見直しにも使えます。
 
 ```json
 {
@@ -176,12 +175,11 @@ export function login() { ... }
 - `project tree` は作業ディレクトリからの相対表示です。新規ファイルは `login.ts (new)`、
   作成されるディレクトリは `auth/ (new dir)` のように後置で印を付けます。
 - 対象ファイルのパスは、上限に達しても**必ず表示**されます。
-- ツリーを切り詰めた場合は `note:` 行で Jev に伝えます（`check` / `context` の表示は
-  `tree: N entries (truncated)` / `(depth limited)`）。
+- ツリーを切り詰めた場合は `note:` 行で Jev に伝えます（`check` / `context` の表示は `tree: N entries (truncated)` / `(depth limited)`）。
 - `file content` は `includeContent: false` で省略できます。
 
-`/jev-placement-guard context <file>` は **Jev へ接続せず**、同じ内容を表示します
-（`<file>` 省略時は採用される設定の `context` だけ）。
+`/jev-placement-guard context <file>` は **Jev へ接続せず**、
+同じ内容を表示します（`<file>` 省略時は採用される設定の `context` だけ）。
 
 ````
 jev-placement-guard context: src/features/login.ts
