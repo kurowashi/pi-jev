@@ -912,6 +912,36 @@ test("selects the OpenRouter endpoint when only OPENROUTER_API_KEY is available"
 	).then((result) => assert.equal(result, undefined));
 });
 
+test("/jev-content-guard status reports the resolved settings", async () => {
+	const root = makeProject({
+		".jev-content-guard.json": JSON.stringify({
+			minProbability: 0.7,
+			onError: "block",
+			scope: "file",
+			timeoutSeconds: 30,
+			maxFileChars: 1000,
+			includeFileName: false,
+			rules: [{ files: "**/*.ts", checks: ["No bar"] }],
+		}),
+		"a.ts": "foo\n",
+	});
+	const { commands } = harness();
+	const ctx = fakeContext(root);
+	const handler = commands.get("jev-content-guard");
+	assert.ok(handler);
+
+	await withEnv(CLEAN_ENV, () => handler("status", ctx));
+
+	const report = ctx.notifications.at(-1)?.message ?? "";
+	assert.match(report, /minProbability: 0\.7/);
+	assert.match(report, /onError: block/);
+	assert.match(report, /scope: file/);
+	assert.match(report, /timeout: 30s/);
+	assert.match(report, /maxFileChars: 1000/);
+	assert.match(report, /includeFileName: false/);
+	assert.match(report, /fail \(top-level\): default/);
+});
+
 test("/jev-content-guard check reports each check", async () => {
 	const root = makeProject({
 		".jev-content-guard.json": JSON.stringify({ rules: [{ files: "**/*.ts", checks: ["No bar", "Has a type"] }] }),

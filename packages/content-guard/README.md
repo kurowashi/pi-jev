@@ -160,7 +160,7 @@ Jev は否定形より肯定形のほうが精度よく答えることがあり�
 
 | コマンド | 説明 |
 |---|---|
-| `/jev-content-guard` | 設定・エンドポイント・キーの状態を表示 |
+| `/jev-content-guard` | 解決済み設定・エンドポイント・キーの状態を表示 |
 | `/jev-content-guard init` | `.jev-content-guard.json` の雛形を作業ディレクトリに作成 |
 | `/jev-content-guard check <file>` | 編集せずに現在の内容でチェック |
 | `/jev-content-guard context [<file>]` | 送信される context と state を表示 |

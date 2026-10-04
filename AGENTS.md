@@ -47,6 +47,8 @@
 | `rules` は `ignore` が勝つ | `packages/core/test/config.test.ts` | `packages/core/src/match.ts` |
 | `enabled: false` のルールはスキップする | `packages/core/test/config.test.ts` | `packages/core/src/match.ts` |
 | `files` 省略時は content が非マッチ、placement が全マッチになる | `packages/core/test/config.test.ts` | `packages/core/src/match.ts` の `matchAllWhenNoFiles` |
+| `/jev-content-guard` は解決済み設定を表示する | `packages/content-guard/test/jev-content-guard.test.ts` | `packages/content-guard/src/index.ts` の `showStatus` |
+| `/jev-placement-guard` は解決済み設定を表示する | `packages/placement-guard/test/status.test.ts` | `packages/placement-guard/src/index.ts` の `showStatus` |
 | Jev の不合格はツールコールをブロックして `fail` を返し、全合格なら通す | `packages/content-guard/test/jev-content-guard.test.ts` + `packages/placement-guard/test/jev-placement-guard.test.ts` | 各 `packages/*/src/index.ts` |
 | Jev 接続失敗時は既定で通す(`onError: "allow"`)。`"block"` で止める | `packages/content-guard/test/jev-content-guard.test.ts` + `packages/placement-guard/test/jev-placement-guard.test.ts` | 各 `packages/*/src/index.ts` |
 | placement は既定(`onlyNewFiles: true`)で新規 `write` だけをチェックする | `packages/placement-guard/test/jev-placement-guard.test.ts` | `packages/placement-guard/src/index.ts` |

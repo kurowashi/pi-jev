@@ -212,7 +212,7 @@ state sent to Jev (as a new file):
 
 | コマンド | 説明 |
 |---|---|
-| `/jev-placement-guard` | 設定・エンドポイント・キーの状態を表示 |
+| `/jev-placement-guard` | 解決済み設定・エンドポイント・キーの状態を表示 |
 | `/jev-placement-guard init` | `.jev-placement-guard.json` の雛形を作業ディレクトリに作成 |
 | `/jev-placement-guard check <file>` | 作成せずに配置チェックを実行（既存ファイルは「新規」として扱う） |
 | `/jev-placement-guard context [<file>]` | 送信される context と state を表示 |

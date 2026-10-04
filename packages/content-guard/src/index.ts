@@ -504,6 +504,13 @@ function showStatus(ctx: ExtensionCommandContext, state: CommandState): void {
 		`endpoint: ${connection.endpoint}`,
 		`model: ${connection.model}`,
 		`key: ${connection.credential ? `${connection.credential.name} (${connection.credential.source})` : connection.error}`,
+		`minProbability: ${settings.minProbability}`,
+		`onError: ${settings.onError}`,
+		`scope: ${settings.scope ?? "auto"}`,
+		`timeout: ${settings.timeoutMs / 1000}s`,
+		`maxFileChars: ${settings.maxFileChars}`,
+		`includeFileName: ${settings.includeFileName}`,
+		`fail (top-level): ${settings.fail === undefined ? "default" : `custom (${settings.fail.length} chars)`}`,
 		"",
 		helpText(),
 	];
