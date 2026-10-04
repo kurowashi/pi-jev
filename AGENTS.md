@@ -9,7 +9,7 @@
 
 ## 完了条件
 
-`npm run verify`(= `npm run check` + `npm test` + `npm run test:coverage`)が通ること。
+`npm run verify`(= `npm run check` + `npm run knip` + `npm test` + `npm run test:coverage`)が通ること。
 フックが通っても CI が通らなければ未完了。CI は同じ `verify` を Node 22.19 / 24 で実行します。
 `npm install` で workspace リンク(`@pi-jev/core`)を張っておくこと。
 
@@ -36,6 +36,9 @@
 | peer は Pi 提供パッケージのみ | `test/contract/dependencies.test.ts` の `PI_PACKAGES` | 各 `packages/*/package.json` |
 | `engines.node` は各パッケージとも `>=22.19.0` | `test/contract/dependencies.test.ts` | 各 `packages/*/package.json` |
 | `src` の import は node builtin・相対 `.ts`・`@pi-jev/core`・Pi 提供パッケージのみ | `test/contract/dependencies.test.ts` の `isAllowed` | `test/contract/dependencies.test.ts` |
+| 循環依存を作らない | `npx biome check .` | `biome.jsonc` の `noImportCycles` |
+| 未宣言の依存を import しない(import 元パッケージの `package.json` へ先に宣言する) | `npx biome check .` | `biome.jsonc` の `noUndeclaredDependencies` |
+| 未使用の export・依存・ファイルを検出しない | `npm run knip` | `knip.jsonc` |
 
 ### 設定・動作
 

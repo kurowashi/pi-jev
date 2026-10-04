@@ -34,6 +34,9 @@
 			"optional": true
 		}
 	},
+	"devDependencies": {
+		"@earendil-works/pi-coding-agent": "0.87.1"
+	},
 	"scripts": {
 		"test": "node --test test/*.test.ts"
 	}
