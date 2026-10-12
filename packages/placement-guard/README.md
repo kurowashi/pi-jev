@@ -1,53 +1,48 @@
 # pi-jev-placement-guard
 
-新規ファイルの作成（`write`）を **Jev（TypeSafe System One）** で配置チェックする Pi 拡張です。
-既存のツリーとこれから追加するファイルを Jev に渡し、「その場所・その名前でよいか」を判定します。
-合格しない作成は実行前にブロックし、`fail` に書いた文字列をモデルへ返します。
-
-編集内容のチェックは姉妹プラグイン `pi-jev-content-guard` が担当します。併用する場合、
-`edit` は `pi-jev-content-guard` だけが、新規 `write` は `pi-jev-content-guard`（内容）とこのプラグイン（配置）の両方がチェックします。
-入力も context も異なるため、リクエストは 2 つに分かれます。
-
-## 動作の流れ
-
-1. `write` のツールコールで起動する。既存ファイルの上書きは、既定（`onlyNewFiles: true`）ではそのまま通す
-2. 対象ファイルのディレクトリから上位へ `.jev-placement-guard.json` を探し、**最初に見つかった 1 つ**を使う（信頼済みの作業ディレクトリ内のみ）
-3. `ignore` にマッチしたファイルはそのまま通す
-4. マッチしたルールの checks と context を 1 つにまとめ、ツリーとファイル内容を付けて Jev へ送る
-5. すべて合格なら作成を実行。1 つでも不合格ならツールコールを失敗させ、`fail` の文字列を返す
+Pi の `write` で新しいファイルを作る前に、その場所と名前が既存のプロジェクト構成に合うかを TypeSafe Jev で検査する拡張です。
+合わない場所への作成は実行前にブロックされ、置き場所を選び直す理由がモデルに返ります。
 
 ## できること
 
-- 追加するファイルを `login.ts (new)`、作成されるディレクトリを `auth/ (new dir)` としてツリーに示す
-- ファイル（glob）ごとにチェック内容を切り替える
-- ツリーを `maxTreeEntries` / `maxTreeDepth` / `treeIgnore` で絞る
-- `/jev-placement-guard context <file>` で、Jev に送る内容を確認する
+- 既存のファイル構成（ツリー）と新しいファイルの内容を Jev に渡し、配置を判定する
+- 新規ファイルの作成だけを検査する。既存ファイルの上書きは既定では検査しない
+- 配置の規約（ディレクトリの役割、命名規則、重複の禁止など）をルールで書く
+- 検査せずに、Jev に送られるツリーと文脈を確認する
+
+## 動作
+
+1. `write` の実行前に、対象ファイルが存在しないことを確認する（存在するときの扱いは `onlyNewFiles` に従う）
+2. 作業ディレクトリのツリーと、作成する内容を用意する
+3. 対象ファイルに該当するルールの検査項目を 1 つのリクエストにまとめ、Jev に送る
+4. 全項目が合格なら作成する。1 つでも不合格なら作成せず、`fail` の文字列をモデルに返す
+
+検査対象は `write` だけです。`bash` のリダイレクトや `cp` で作られるファイルは検査しません。
 
 ## インストール
 
 ```bash
-npm install                                     # @pi-jev/core の workspace リンクを作る
-pi install /path/to/pi-jev/packages/placement-guard  # パッケージとして追加
+pi install git:github.com/kurowashi/pi-jev
 ```
 
-git 経由で入れる場合はモノレポの root から `pi install git:github.com/kurowashi/pi-jev`（姉妹プラグインの content-guard も同時に入る）。
+この方法では、姉妹拡張の [content-guard](../content-guard/README.md) も同時に入ります。
+placement-guard だけを入れる場合は、ローカルのリポジトリを指定します。
 
-`@pi-jev/core` を参照するため、ファイル 1 つを `~/.pi/agent/extensions/` へコピーする使い方はできません。
+```bash
+cd /path/to/pi-jev && npm install   # 初回のみ（@pi-jev/core のリンクを作る）
+pi install /path/to/pi-jev/packages/placement-guard
+```
 
 ## クイックスタート
 
 1. `/jev-placement-guard init` で `.jev-placement-guard.json` の雛形を作る
-2. `context` にディレクトリ構成と命名規則を書き、ルールを書く
-3. `/jev-placement-guard check src/features/auth/login.ts` で結果を確認する
+2. `context` にディレクトリの役割と命名規則を書く
+3. `/jev-placement-guard check src/features/auth/login.ts` で判定を確かめる
 
-`check` は対象が存在しなくても、既に存在していても実行できます。
-既存ファイルは「新規作成するつもり」としてツリーから除いて判定するため、配置の見直しにも使えます。
+`check` は、存在しないパスにも既存のパスにも使えます。既存のファイルは「新規作成する」として扱うので、配置の見直しにも使えます。
 
 ```json
 {
-  "minProbability": 0.5,
-  "onError": "allow",
-  "onlyNewFiles": true,
   "context": "src/ は機能単位で分割する。tests/ は src/ をミラーする。ドキュメントは docs/ に置く。",
   "rules": [
     {
@@ -67,206 +62,196 @@ git 経由で入れる場合はモノレポの root から `pi install git:githu
 
 ## 設定ファイル
 
-`.jev-placement-guard.json` は対象ファイルのディレクトリから上位（ファイルシステム root まで）へ探し、
-最初に見つかった 1 つだけを使います。複数ファイルのマージもユーザー共通設定もありません。
-共通の設定はリポジトリ root など祖先のディレクトリに 1 枚置いてください。
+設定は `.jev-placement-guard.json` の 1 ファイルです。
 
-### トップレベル
+### 探索と信頼
 
-| キー | 既定値 | 説明 |
+- 対象ファイルのディレクトリから親へ順にたどり、最初に見つかった 1 つだけを使います。複数の設定はマージしません。
+- ユーザー共通の設定はありません。共通にしたい規約はリポジトリのルートなど祖先のディレクトリに置きます。
+- 未信頼のプロジェクトでは設定を読みません。`/trust` で信頼してください。
+
+### トップレベルの項目
+
+| キー | 既定値 | 内容 |
 |---|---|---|
-| `enabled` | `true` | `false` でチェックを無効化 |
-| `endpoint` | 自動 | Jev のエンドポイント URL |
-| `model` | 自動 | Jev のモデル名 |
-| `apiKeyEnv` | 自動 | API キーを読む環境変数名 |
-| `minProbability` | `0.5` | 合格に必要な「yes」の確率 |
-| `onError` | `"allow"` | Jev に接続できないときの挙動。`"block"` で作成を止める |
-| `onlyNewFiles` | `true` | 存在しないパスへの `write` だけをチェックする |
-| `includeContent` | `true` | ツリーに加えてファイル内容も Jev に送る |
-| `maxFileChars` | `40000` | ファイル内容の最大文字数（超えた分は中央を省略） |
-| `maxTreeEntries` | `400` | ツリーに含めるエントリ数の上限 |
-| `maxTreeDepth` | `5` | ツリーの最大深さ。対象パス上のディレクトリは常にたどる |
-| `treeIgnore` | 主要な生成物ディレクトリ | ツリーから隠す glob。指定すると既定値を置き換える |
-| `timeoutSeconds` | `20` | 1 リクエストのタイムアウト（秒） |
-| `fail` | 自動生成 | 失敗時に返す文字列（全ルール共通の既定値） |
-| `context` | なし | すべてのチェックに渡す前提知識（ディレクトリ構成など） |
-| `ignore` | なし | チェックしないファイルの glob |
-| `includeFileName` | `true` | state に `file: <path> (new)` 行を含める |
+| `enabled` | `true` | `false` で検査を無効化 |
+| `endpoint` | 自動 | Jev の URL。[API キーとエンドポイント](#api-キーとエンドポイント)を参照 |
+| `model` | 自動 | 使うモデル名 |
+| `apiKeyEnv` | 自動 | API キーを読む環境変数名。最初に探す |
+| `minProbability` | `0.5` | 合格に必要な確率のしきい値 |
+| `onError` | `"allow"` | Jev を使えないときの扱い。[失敗時の挙動](#失敗時の挙動)を参照 |
+| `onlyNewFiles` | `true` | `false` にすると、既存ファイルの上書きも検査する |
+| `includeContent` | `true` | 作成する内容を Jev に送る |
+| `includeFileName` | `true` | Jev に対象ファイルのパスを送る |
+| `maxFileChars` | `40000` | Jev に送るファイル内容の最大文字数 |
+| `maxTreeEntries` | `400` | Jev に送るツリーのエントリ数の上限 |
+| `maxTreeDepth` | `5` | Jev に送るツリーの深さの上限 |
+| `treeIgnore` | 既定の一覧 | ツリーから隠す glob。[ツリー](#jev-に送られるツリー)を参照 |
+| `timeoutSeconds` | `20` | 1 リクエストの待ち時間（秒） |
+| `fail` | 自動生成 | 不合格時にモデルへ返す文面。ルールの `fail` がない場合に使う |
+| `context` | なし | すべての検査に渡す前提知識。ディレクトリ構成などを書く |
+| `ignore` | なし | 検査しないファイルのパターン |
 | `rules` | `[]` | ルールの配列 |
 
-`treeIgnore` の既定値は `.git`, `node_modules`, `.venv`, `__pycache__`, `dist`, `build`, `target`,
-`vendor`, `.next`, `.cache`, `.pi/tasks`, `coverage` などです。
+### ルールの項目
 
-### ルール
-
-| キー | 説明 |
+| キー | 内容 |
 |---|---|
-| `name` | 表示名。`{rule}` で参照できる |
+| `name` | 表示名。`{rule}` で参照できる。省略時は設定ファイル名 |
 | `enabled` | `false` でルールを無効化 |
-| `files` | glob または glob の配列。`/` を含まない場合はファイル名にマッチ。省略するとすべてのファイルにマッチ |
-| `checks` | 文字列、または `{ "check": "...", "minProbability": 0.8, "negate": true }` の配列 |
-| `fail` | このルール専用の失敗メッセージ |
-| `context` | このルール専用の前提知識 |
-| `minProbability` | チェックの既定しきい値（ルール単位） |
-| `negate` | チェックの既定の反転（ルール単位） |
+| `files` | 対象ファイルのパターン（文字列または配列）。省略するとすべてのファイルに一致する |
+| `checks` | 検査項目の配列。[検査項目](#検査項目checks)を参照 |
+| `fail` | このルール専用の失敗文面 |
+| `context` | このルール専用の前提知識。トップレベルの `context` の後に続けて送られる |
+| `minProbability` | このルールの検査項目の既定しきい値 |
+| `negate` | このルールの検査項目の既定の反転 |
 
-glob は `**`（任意の階層）、`*`（同一階層内）、`?`（1 文字）に対応します。先頭の `!` は除外パターンです。
-パターンは設定ファイルのあるディレクトリからの相対パスで判定します。
+`files` のパターンは次のとおりです。
 
-### `negate`：否定形を肯定形に置き換える
+- `**` は任意の階層、`*` は同じ階層内の任意の文字列、`?` は 1 文字に一致します。
+- `/` を含まないパターンはファイル名に一致します。
+- `/` を含むパターンは設定ファイルのあるディレクトリからの相対パスに一致します。
+- 先頭の `!` は除外です。除外だけでは一致しません。肯定のパターンが 1 つ以上必要です。
 
-Jev は否定形より肯定形のほうが精度よく答えることがあります。
-`negate: true` はチェック文字列を**失敗の状態**として送り、返ってきた確率を反転して判定します。
+### 検査項目（checks）
+
+検査項目は文字列か、オブジェクトで指定します。
+
+```json
+"checks": [
+  "文字列で書いた検査項目",
+  { "check": "しきい値と反転を個別に指定する項目", "minProbability": 0.8, "negate": true }
+]
+```
+
+`minProbability` と `negate` は、検査項目 > ルール > トップレベルの順で上書きされます。
+
+#### negate: 失敗の状態を書く
+
+`negate: true` のときは、検査項目を**失敗の状態**として Jev に送り、返ってきた確率を反転して判定します。
+「似た名前のファイルが既に別の場所にある」のような否定の内容は、こう書くと精度が上がることがあります。
+
+```json
+{ "check": "既存モジュールと責務が重複している", "negate": true }
+```
+
+この例では、Jev が「既存モジュールと責務が重複している」と答える確率が 0.5 以下のとき合格です。表示には `[negated]` が付きます。
+
+### ignore：検査しないファイル
+
+`ignore` に一致したファイルは検査されず、Jev へのリクエストも送られません。書き込みはそのまま実行されます。
 
 ```json
 {
-  "name": "Placement",
-  "files": ["src/**/*.ts"],
-  "negate": true,
-  "checks": [
-    "機能に属するファイルが src/ 直下に置かれている",
-    "似た名前のファイルが別の場所に既にある",
-    { "check": "新しいディレクトリを不必要に増やしている", "negate": false }
-  ]
+  "ignore": ["docs/**", "*.lock"],
+  "rules": [{ "files": "src/**/*.ts", "checks": ["新しいファイルは機能ディレクトリに置かれている"] }]
 }
 ```
 
-`negate` はルール単位の既定値で、チェック単位に上書きできます。
-`minProbability` は反転後も「要件を満たす確率の下限」です。
+### fail：不合格時の文面
 
-### `fail` のプレースホルダ
+不合格時にモデルへ返す文面です。使う文面は次の順で決まります。
+
+1. ルールの `fail`
+2. トップレベルの `fail`
+3. どちらもなければ、失敗した検査項目と確率から自動生成
 
 | プレースホルダ | 内容 |
 |---|---|
-| `{file}` | 作成対象ファイル（作業ディレクトリからの相対パス） |
-| `{rule}` | ルール名（未指定なら設定ファイル名） |
-| `{checks}` | 失敗したチェックの一覧（確率付き） |
-| `{probability}` | 失敗したチェックのうち最も低い合格確率 |
+| `{file}` | 作成するファイル（作業ディレクトリからの相対パス） |
+| `{rule}` | ルール名 |
+| `{checks}` | 失敗した検査項目の一覧（確率付き） |
+| `{probability}` | 失敗した検査項目のうち、最も低い合格確率 |
 
-`fail` を書かなければ、失敗したチェックと確率から自動生成します。
+## Jev に送られるツリー
 
-## Jev に送られる内容
+Jev は、作業ディレクトリの既存ファイルのツリーを見て配置を判断します。
 
-1 リクエストにつき `state` 文字列を 1 つ送ります。複数ルールは 1 つにまとめます。
+- 作成されるファイルは `login.ts (new)` のように `(new)` が付きます。作成されるディレクトリは `auth/ (new dir)` のように `(new dir)` が付きます。
+- 対象パスの上位ディレクトリは、上限に達しても必ず表示されます。
+- ツリーの深さが `maxTreeDepth` を超えた部分、またはエントリ数が `maxTreeEntries` を超えた部分は省略されます。省略したことは Jev に伝えられます。
+- `treeIgnore` の既定値は次のとおりです。指定すると既定値は使われず、指定した一覧だけが適用されます。
 
-````
-<マージされた context>
+  `.git`、`.svn`、`.hg`、`node_modules`、`.venv`、`venv`、`__pycache__`、`.mypy_cache`、`.pytest_cache`、`.ruff_cache`、`dist`、`build`、`out`、`target`、`vendor`、`.next`、`.cache`、`.pi/tasks`、`coverage`
 
-file: src/features/auth/login.ts (new)
+- `treeIgnore` のパターンの先頭に `!` を付けると、そのパターンに一致するものは隠しません。既定の一覧の一部だけを表示したいときに使います。
 
-project tree
-```
-./
-  src/
-    features/
-      auth/ (new dir)
-        login.ts (new)
-  docs/
-    README.md
-```
+### 送信される内容
 
-file content
-```
-export function login() { ... }
-```
-````
+1 回の書き込みにつき、次の内容を Jev の接続先へ送ります。
 
-- `file:` 行は `new` か `overwrite` かを示します（`includeFileName: false` で消せます）。
-- `project tree` は作業ディレクトリからの相対表示です。新規ファイルは `login.ts (new)`、
-  作成されるディレクトリは `auth/ (new dir)` のように後置で印を付けます。
-- 対象ファイルのパスは、上限に達しても**必ず表示**されます。
-- ツリーを切り詰めた場合は `note:` 行で Jev に伝えます（`check` / `context` の表示は `tree: N entries (truncated)` / `(depth limited)`）。
-- `file content` は `includeContent: false` で省略できます。
-
-`/jev-placement-guard context <file>` は **Jev へ接続せず**、
-同じ内容を表示します（`<file>` 省略時は採用される設定の `context` だけ）。
-
-````
-jev-placement-guard context: src/features/login.ts
-config: /repo/.jev-placement-guard.json — 2 rule(s)
-enabled: true   onlyNewFiles: true   includeFileName: true
-
-context (from /repo/.jev-placement-guard.json):
-----
-src/ は機能単位で分割する。
-----
-file line: file: src/features/login.ts (new)
-
-rules merged into one request: 2 — Application, Style
-merged context (2 part(s)):
-----
-src/ は機能単位で分割する。
-
-src/ 直下は避ける。
-----
-
-state sent to Jev (as a new file):
-----
-...
-----
-````
-
-`/jev-placement-guard check <file>` の結果にも `state sent to Jev:` が付きます（長い state は省略されます）。
+- 対象ファイルのパスと「新規」か「上書き」かの別（`includeFileName: false` で送らない）
+- 作業ディレクトリのツリー（`treeIgnore` 適用後）
+- 作成する内容（`includeContent: false` で送らない）
+- `context` と、該当するルールの `context`
+- 該当するルールの検査項目
 
 ## コマンド
 
-| コマンド | 説明 |
+| コマンド | 内容 |
 |---|---|
-| `/jev-placement-guard` | 解決済み設定・エンドポイント・キーの状態を表示 |
-| `/jev-placement-guard init` | `.jev-placement-guard.json` の雛形を作業ディレクトリに作成 |
-| `/jev-placement-guard check <file>` | 作成せずに配置チェックを実行（既存ファイルは「新規」として扱う） |
-| `/jev-placement-guard context [<file>]` | 送信される context と state を表示 |
-| `/jev-placement-guard on` / `off` | このセッションのチェックを有効化 / 無効化 |
+| `/jev-placement-guard` | 解決済みの設定、接続先、キーの出所を表示 |
+| `/jev-placement-guard init` | 作業ディレクトリに雛形を作成。既存の設定は上書きしない |
+| `/jev-placement-guard check <file>` | ファイルを作らずに配置を検査。既存のファイルは「新規」として扱う |
+| `/jev-placement-guard context [<file>]` | Jev に接続せず、送られるツリーと文脈を表示 |
+| `/jev-placement-guard on` / `off` | このセッションの検査を有効化 / 無効化 |
 
-`JEV_PLACEMENT_GUARD_DISABLE=1` で常時無効にできます。
+環境変数 `JEV_PLACEMENT_GUARD_DISABLE=1` を設定すると、検査を常に無効にできます。
+`on` / `off` はセッションごとに初期状態へ戻ります。
 
 ## API キーとエンドポイント
 
-`process.env` を先に見て、無ければ対象ファイルと作業ディレクトリから上位へ `.env` を探します。
-使うキーは `apiKeyEnv` → 汎用名 → エンドポイント固有名の順です（`pi-jev-content-guard` と同じ）。
+### 接続先
 
-| エンドポイント | 環境変数 | 既定モデル |
+接続先は次の順で決まります。
+
+1. 設定ファイルの `endpoint`
+2. 環境変数 `SYSTEMONE_ENDPOINT`
+3. API キーから自動選択（TypeSafe → OpenRouter → OpenCode Zen → Command Code。キーが無ければ TypeSafe）
+
+| 接続先 | キーの環境変数（探す順） | 既定モデル |
 |---|---|---|
-| TypeSafe（既定） | `SYSTEMONE_API_KEY`, `TYPESAFE_API_KEY` | `jev-1.13.0` |
+| TypeSafe（既定） | `SYSTEMONE_API_KEY`、`TYPESAFE_API_KEY` | `jev-1.13.0` |
 | OpenRouter | `OPENROUTER_API_KEY` | `typesafe/jev-1.13` |
-| OpenCode Zen | `OPENCODE_API_KEY`, `OPENCODE_ZEN_API_KEY` | `jev-1.13` |
+| OpenCode Zen | `OPENCODE_API_KEY`、`OPENCODE_ZEN_API_KEY` | `jev-1.13` |
 | Command Code | `COMMANDCODE_API_KEY` | `typesafe/jev` |
 
-- `SYSTEMONE_ENDPOINT` は最優先で使います。
-- 明示した `endpoint` / `SYSTEMONE_ENDPOINT` が無い場合は、キーから自動選択します（TypeSafe → OpenRouter → OpenCode Zen → Command Code）。
-- 接続先を固定するには `endpoint` / `model` / `apiKeyEnv` を設定します。
+既定モデルは接続先の URL で決まります。上の表にない URL を指定したときは `jev-1.13.0` を使います。
 
-## Jev の容量制限
+### キーの探し方
 
-- 1 リクエストの `state` + 最長の質問は、32k トークン程度に収める必要があります。
-- `maxFileChars` と `maxTreeEntries` は文字数・件数の上限で、トークン数は見ていません。巨大なツリーと大きなファイルでは超過し得ます。超過時は HTTP 400 となり、`onError` に従います（既定は作成を通す）。
+1. 設定ファイルの `apiKeyEnv` で指定した環境変数
+2. `SYSTEMONE_API_KEY`
+3. 接続先に対応するキー（上の表）
 
-## セキュリティ上の注意
+環境変数を先に探し、無ければ対象ファイルのディレクトリと作業ディレクトリから親へ `.env` を探します。
 
-- プロジェクトのツリー、作成しようとしているファイルの内容、`context` は Jev のエンドポイントへ送信されます。機密情報を含むリポジトリではルールと `treeIgnore` を絞ってください。
-- `.jev-placement-guard.json` は作業ディレクトリが信頼されている場合のみ有効です。未信頼のプロジェクトでは警告を表示して無視します。
-- 探索はファイルシステム root まで行くため、信頼済みの作業ディレクトリより上にある設定も採用されます。親ディレクトリを共有する環境では注意してください。
-- 作業ディレクトリ外を対象にした `write` は、ツリーが無いため警告を出して通過します。
-- `onError` の既定は `"allow"` です。Jev が落ちていても作成を通しますが、厳密に止めたい場合は `"block"` を設定してください。
+## 失敗時の挙動
+
+| 状況 | 挙動 |
+|---|---|
+| 検査項目が 1 つでも不合格 | 作成せず、`fail` の文面をモデルに返す |
+| Jev に接続できない、タイムアウト、応答が不正、キーが無い | `onError` に従う |
+| 既存ファイルへの `write`（`onlyNewFiles: true` の既定） | 検査せず、そのまま実行する |
+| `ignore` に一致するファイル | 検査せず、そのまま実行する |
+| 作業ディレクトリの外に作成する | ツリーが無いため、警告を表示して検査せず実行する |
+| 設定ファイルが読めない、未信頼のプロジェクトにある | 警告を表示し、その設定を無視する（検査しない） |
+
+`onError` の値は次のとおりです。
+
+- `"allow"`（既定）: 警告を 1 回表示し、作成を実行する
+- `"block"`: 作成を実行せず、理由をモデルに返す
 
 ## 制限事項
 
-- フックするのは `write` だけです。`bash` のリダイレクトや `cp` によるファイル作成は対象外です。
-- 既存ファイルの上書きは既定でチェックしません。`onlyNewFiles: false` で有効化できますが、チェック文言を配置に限らず調整してください。
-- ツリーは `maxTreeEntries` / `maxTreeDepth` で打ち切られます。巨大なリポジトリでは `context` に対象領域の説明を書いてください。
-- Jev の回答は確率です。`minProbability` で感度を調整してください（既定 `0.5`）。
+- 検査するのは `write` だけです。`bash` のリダイレクトや `cp` で作られるファイルは対象外です。
+- 既存ファイルの上書きは既定では検査しません。検査するには `onlyNewFiles: false` を設定します。その場合は、検査項目も上書きを前提に書いてください。
+- ツリーの上限を超えた部分は Jev に見えません。ディレクトリの役割は `context` に書いてください。
+- `maxFileChars`、`maxTreeEntries`、`maxTreeDepth` は文字数・件数・深さで数えます。トークン数は見ていません。大きなツリーと大きなファイルでは Jev の上限を超えることがあります。超えると HTTP 400 となり、`onError` に従います。
+- 判定は確率です。誤判定があるときは `minProbability` を調整してください。
+- [pi-jev-content-guard](../content-guard/README.md) を併用すると、新規ファイルの `write` は内容と配置の 2 回の Jev リクエストになります。
 
-## 開発
+## 注意
 
-```bash
-npm test        # node:test（モックした Jev エンドポイントで検証）
-```
-
-実際の Jev に対する簡易 E2E:
-
-```bash
-cd /tmp/jev-tree-e2e   # .jev-placement-guard.json と src/ などを用意
-pi -p --no-session --model <provider>/<model> \
-  --extension /path/to/pi-jev/packages/placement-guard/src/index.ts \
-  "src/ に新しいモジュールを追加して"
-```
+- ツリー、作成する内容、`context` は接続先に送信されます。機密情報を含むリポジトリでは `treeIgnore` と `ignore` で絞ってください。
+- 探索はファイルシステムのルートまで行うため、作業ディレクトリより上にある `.jev-placement-guard.json` も使われます。親ディレクトリを共有する環境では注意してください。

@@ -1,39 +1,42 @@
 # pi-jev-content-guard
 
-`edit` / `write` の内容を **Jev（TypeSafe System One）** で意味的にチェックする Pi 拡張です。
-合格しない編集は実行前にブロックし、`fail` に書いた文字列をモデルへ返します。
-
-## 動作の流れ
-
-1. `edit` / `write` のツールコールで起動する
-2. 対象ファイルのディレクトリから上位へ `.jev-content-guard.json` を探し、**最初に見つかった 1 つ**を使う（信頼済みの作業ディレクトリ内のみ）
-3. `ignore` にマッチしたファイルはそのまま通す
-4. マッチしたルールの checks と context を 1 つにまとめ、Jev へ yes/no の質問として送る
-5. すべて合格なら編集を実行。1 つでも不合格ならツールコールを失敗させ、`fail` の文字列を返す
+Pi の `edit` / `write` で書き込む内容を、TypeSafe Jev で検査する拡張です。
+規約に反する内容は書き込み前にブロックされ、修正すべき理由がモデルに返ります。
 
 ## できること
 
-- ファイル（glob）ごとにチェック内容を切り替える
-- ルール単位・チェック単位で `minProbability` と `negate` を指定する
-- 複数ルールを 1 リクエストにまとめる（API アクセスはファイルごとに 1 回）
-- `/jev-content-guard context <file>` で、Jev に送る内容を確認する
+- ファイルの種類ごとに規約を書き、書き込み内容を検査する（例: `any` を使わない、公開関数に戻り値の型を書く）
+- Jev が各規約を yes / no で判定し、確率のしきい値で合否を決める
+- 1 回の編集で該当するルールをまとめて 1 回の Jev リクエストで検査する
+- 検査せずに、Jev に送られる文脈と内容を確認する
+
+## 動作
+
+1. `edit` / `write` の実行前に、対象ファイルに適用される設定ファイルを探す
+2. 対象ファイルに該当するルールの検査項目を 1 つのリクエストにまとめ、Jev に送る
+3. 全項目が合格なら実行する。1 つでも不合格なら実行せず、`fail` の文字列をモデルに返す
+
+検査対象は `edit` と `write` だけです。`bash` などで行われたファイル変更は検査しません。
 
 ## インストール
 
 ```bash
-npm install                                # @pi-jev/core の workspace リンクを作る
-pi install /path/to/pi-jev/packages/content-guard  # パッケージとして追加
+pi install git:github.com/kurowashi/pi-jev
 ```
 
-git 経由で入れる場合はモノレポの root から `pi install git:github.com/kurowashi/pi-jev`（姉妹プラグインの placement-guard も同時に入る）。
+この方法では、姉妹拡張の [placement-guard](../placement-guard/README.md) も同時に入ります。
+content-guard だけを入れる場合は、ローカルのリポジトリを指定します。
 
-`@pi-jev/core` を参照するため、ファイル 1 つを `~/.pi/agent/extensions/` へコピーする使い方はできません。
+```bash
+cd /path/to/pi-jev && npm install   # 初回のみ（@pi-jev/core のリンクを作る）
+pi install /path/to/pi-jev/packages/content-guard
+```
 
 ## クイックスタート
 
 1. `/jev-content-guard init` で `.jev-content-guard.json` の雛形を作る
-2. ルールを書く
-3. `/jev-content-guard check src/index.ts` で結果を確認する
+2. `rules` の `checks` をプロジェクトの規約に書き換える
+3. `/jev-content-guard check src/index.ts` で判定を確かめる
 
 ```json
 {
@@ -57,179 +60,166 @@ git 経由で入れる場合はモノレポの root から `pi install git:githu
 
 ## 設定ファイル
 
-`.jev-content-guard.json` は対象ファイルのディレクトリから上位（ファイルシステム root まで）へ探し、
-最初に見つかった 1 つだけを使います。複数ファイルのマージもユーザー共通設定もありません。
-共通の設定はリポジトリ root など祖先のディレクトリに 1 枚置いてください。
+設定は `.jev-content-guard.json` の 1 ファイルです。
 
-### トップレベル
+### 探索と信頼
 
-| キー | 既定値 | 説明 |
+- 対象ファイルのディレクトリから親へ順にたどり、最初に見つかった 1 つだけを使います。複数の設定はマージしません。
+- ユーザー共通の設定はありません。共通にしたい規約はリポジトリのルートなど祖先のディレクトリに置きます。
+- 未信頼のプロジェクトでは設定を読みません。`/trust` で信頼してください。
+- 作業ディレクトリの外のファイルには、設定を適用しません。
+
+### トップレベルの項目
+
+| キー | 既定値 | 内容 |
 |---|---|---|
-| `enabled` | `true` | `false` でチェックを無効化 |
-| `endpoint` | 自動 | Jev のエンドポイント URL |
-| `model` | 自動 | Jev のモデル名 |
-| `apiKeyEnv` | 自動 | API キーを読む環境変数名 |
-| `minProbability` | `0.5` | 合格に必要な「yes」の確率 |
-| `onError` | `"allow"` | Jev に接続できないときの挙動。`"block"` で編集を止める |
-| `scope` | 自動 | `"change"` / `"file"` / `"both"`（後述） |
-| `includeFileName` | `true` | state に `file: <path>` 行を含める |
-| `maxFileChars` | `40000` | ファイル内容の最大文字数（超えた分は中央を省略） |
-| `timeoutSeconds` | `20` | 1 リクエストのタイムアウト（秒） |
-| `fail` | 自動生成 | 失敗時に返す文字列（全ルール共通の既定値） |
-| `context` | なし | すべてのチェックに渡す前提知識 |
-| `ignore` | なし | チェックしないファイルの glob |
+| `enabled` | `true` | `false` で検査を無効化 |
+| `endpoint` | 自動 | Jev の URL。[API キーとエンドポイント](#api-キーとエンドポイント)を参照 |
+| `model` | 自動 | 使うモデル名 |
+| `apiKeyEnv` | 自動 | API キーを読む環境変数名。最初に探す |
+| `minProbability` | `0.5` | 合格に必要な確率のしきい値 |
+| `onError` | `"allow"` | Jev を使えないときの扱い。[失敗時の挙動](#失敗時の挙動)を参照 |
+| `scope` | `"change"` | `edit` の検査範囲（`edit` の既定）。[検査範囲](#検査範囲scope)を参照 |
+| `includeFileName` | `true` | Jev に対象ファイルのパスを送る |
+| `maxFileChars` | `40000` | Jev に送るファイル内容の最大文字数 |
+| `timeoutSeconds` | `20` | 1 リクエストの待ち時間（秒） |
+| `fail` | 自動生成 | 不合格時にモデルへ返す文面。ルールの `fail` がない場合に使う |
+| `context` | なし | すべての検査に渡す前提知識 |
+| `ignore` | なし | 検査しないファイルのパターン。[ignore](#ignore検査しないファイル) を参照 |
 | `rules` | `[]` | ルールの配列 |
 
-### ルール
+### ルールの項目
 
-| キー | 説明 |
+| キー | 内容 |
 |---|---|
-| `name` | 表示名。`{rule}` で参照できる |
+| `name` | 表示名。`{rule}` で参照できる。省略時は設定ファイル名 |
 | `enabled` | `false` でルールを無効化 |
-| `files` | glob または glob の配列。`/` を含まない場合はファイル名にマッチ。省略するとどのファイルにもマッチしない |
-| `checks` | 文字列、または `{ "check": "...", "minProbability": 0.8, "negate": true }` の配列 |
-| `fail` | このルール専用の失敗メッセージ |
-| `context` | このルール専用の前提知識 |
-| `minProbability` | チェックの既定しきい値（ルール単位） |
-| `negate` | チェックの既定の反転（ルール単位） |
+| `files` | 対象ファイルのパターン（文字列または配列）。省略するとどのファイルにも一致しない |
+| `checks` | 検査項目の配列。[検査項目](#検査項目checks) を参照 |
+| `fail` | このルール専用の失敗文面 |
+| `context` | このルール専用の前提知識。トップレベルの `context` の後に続けて送られる |
+| `minProbability` | このルールの検査項目の既定しきい値 |
+| `negate` | このルールの検査項目の既定の反転 |
 
-glob は `**`（任意の階層）、`*`（同一階層内）、`?`（1 文字）に対応します。先頭の `!` は除外パターンです。
-パターンは設定ファイルのあるディレクトリからの相対パスで判定します。
+`files` のパターンは次のとおりです。
 
-### `ignore`：ファイルを対象外にする
+- `**` は任意の階層、`*` は同じ階層内の任意の文字列、`?` は 1 文字に一致します。
+- `/` を含まないパターンはファイル名に一致します（例: `*.ts` はどの階層の `.ts` にも一致）。
+- `/` を含むパターンは設定ファイルのあるディレクトリからの相対パスに一致します。
+- 先頭の `!` は除外です。除外だけでは一致しません。肯定のパターンが 1 つ以上必要です。
 
-`ignore` にマッチしたファイルはチェックされず、Jev へのリクエストも送られません。
+### 検査項目（checks）
+
+検査項目は文字列か、オブジェクトで指定します。
 
 ```json
-{
-  "ignore": ["**/__init__.py", "**/generated/**", "*.min.js"],
-  "rules": [{ "files": "**/*.py", "checks": ["No prints"] }]
-}
+"checks": [
+  "文字列で書いた検査項目",
+  { "check": "しきい値と反転を個別に指定する項目", "minProbability": 0.8, "negate": true }
+]
 ```
 
-- 文字列 1 つでも配列でも指定できます。`/` を含まないパターンはファイル名にマッチします。
-- `!` で除外を打ち消せます（例: `["*.py", "!keep.py"]` では `keep.py` だけチェックされます）。
-- `/jev-content-guard check` は `ignored` と表示し、Jev には接続しません。
+`minProbability` と `negate` は、検査項目 > ルール > トップレベルの順で上書きされます。
 
-### `negate`：否定形を肯定形に置き換える
+#### negate: 失敗の状態を書く
 
-Jev は否定形より肯定形のほうが精度よく答えることがあります。
-`negate: true` はチェック文字列を**失敗の状態**として送り、返ってきた確率を反転して判定します。
+Jev は否定の文より肯定の文に精度よく答えることがあります。`negate: true` のときは、検査項目を**失敗の状態**として Jev に送り、返ってきた確率を反転して判定します。
 
 ```json
 {
   "name": "Quality",
   "files": ["**/*.ts"],
   "negate": true,
-  "checks": [
-    "コードが汚い",
-    "不要な複雑さがある",
-    { "check": "コメントが日本語でない", "negate": false }
-  ]
+  "checks": ["コードが汚い", "不要な複雑さがある"]
 }
 ```
 
-`negate` はルール単位の既定値で、チェック単位に上書きできます。
-`minProbability` は反転後も「要件を満たす確率の下限」です。上の例で `0.5` なら、
-`コードが汚い` の確率が 0.5 以下のときに合格します。表示には `negated` の印が付きます。
+この例では、「コードが汚い」と Jev が答える確率が 0.5 以下のとき合格です。表示には `[negated]` が付きます。
 
-### `fail` のプレースホルダ
+### ignore：検査しないファイル
+
+`ignore` に一致したファイルは検査されず、Jev へのリクエストも送られません。
+
+```json
+{
+  "ignore": ["**/__init__.py", "**/generated/**", "*.min.js"],
+  "rules": [{ "files": "**/*.py", "checks": ["print を使っていない"] }]
+}
+```
+
+- 文字列 1 つでも配列でも指定できます。`files` と同じパターン規則です。
+- `!` で除外を打ち消せます。例: `["*.py", "!keep.py"]` では `keep.py` だけが検査されます。
+
+### fail：不合格時の文面
+
+不合格時にモデルへ返す文面です。使う文面は次の順で決まります。
+
+1. ルールの `fail`
+2. トップレベルの `fail`
+3. どちらもなければ、失敗した検査項目と確率から自動生成
 
 | プレースホルダ | 内容 |
 |---|---|
-| `{file}` | 編集対象ファイル（作業ディレクトリからの相対パス） |
-| `{rule}` | ルール名（未指定なら設定ファイル名） |
-| `{checks}` | 失敗したチェックの一覧（確率付き） |
-| `{probability}` | 失敗したチェックのうち最も低い合格確率 |
+| `{file}` | 編集したファイル（作業ディレクトリからの相対パス） |
+| `{rule}` | ルール名 |
+| `{checks}` | 失敗した検査項目の一覧（確率付き） |
+| `{probability}` | 失敗した検査項目のうち、最も低い合格確率 |
 
-`fail` を書かなければ、失敗したチェックと確率から自動生成します。
+## 検査範囲（scope）
 
-## チェック対象（`scope`）
+`scope` は `edit` で Jev に送る内容を決めます。
 
-| 値 | 送る内容 |
+| 値 | Jev に送る内容 |
 |---|---|
-| `"change"` | 変更部分（before/after）のみ。`edit` の既定 |
-| `"file"` | ファイル全体 |
-| `"both"` | ファイル全体と変更部分 |
+| `"change"` | 変更箇所（before / after）だけ |
+| `"file"` | 編集後のファイル全体 |
+| `"both"` | 編集後のファイル全体と変更箇所 |
 
-- `write` は常にファイル全体を送ります（`scope` は無視）。
-- `"both"` でファイル全体が `maxFileChars` を超える場合は、全体だけを切り詰めます。
-- 編集後ファイルを計算できないとき（完全一致の置換が成立しないなど）は、変更部分にフォールバックします。
+- `write` は常にファイル全体を送ります。`scope` は無視されます。
+- `file` と `both` は、編集後のファイルを予測して作ります。予測できないとき（一致する箇所が無い、複数ある、編集が重なる）は、変更箇所だけを送ります。
+- 予測したファイルが `maxFileChars` を超えたとき、`file` は変更箇所だけに切り替えます。`both` はファイル全体を切り詰めて変更箇所と一緒に送ります。
 
 ## コマンド
 
-| コマンド | 説明 |
+| コマンド | 内容 |
 |---|---|
-| `/jev-content-guard` | 解決済み設定・エンドポイント・キーの状態を表示 |
-| `/jev-content-guard init` | `.jev-content-guard.json` の雛形を作業ディレクトリに作成 |
-| `/jev-content-guard check <file>` | 編集せずに現在の内容でチェック |
-| `/jev-content-guard context [<file>]` | 送信される context と state を表示 |
-| `/jev-content-guard on` / `off` | このセッションのチェックを有効化 / 無効化 |
+| `/jev-content-guard` | 解決済みの設定、接続先、キーの出所を表示 |
+| `/jev-content-guard init` | 作業ディレクトリに雛形を作成。既存の設定は上書きしない |
+| `/jev-content-guard check <file>` | ファイルを変更せずに検査し、各項目の合否と確率を表示 |
+| `/jev-content-guard context [<file>]` | Jev に接続せず、送られる文脈と内容を表示 |
+| `/jev-content-guard on` / `off` | このセッションの検査を有効化 / 無効化 |
 
-`JEV_CONTENT_GUARD_DISABLE=1` で常時無効にできます。
-
-## Jev に送られる内容
-
-1 リクエストにつき `state` 文字列を 1 つ送ります。複数ルールは 1 つにまとめます。
-
-````
-<マージされた context>
-
-file: docs/README.md
-```
-<編集後のファイル全体>
-```
-
-file edit
-```diff
-<変更部分（before/after）>
-```
-````
-
-- 先頭はトップレベル `context` とマッチしたルールの `context` を空行で連結したもの（重複は除去）。
-- `file:` 行は `includeFileName: false` で消せます。
-- `file edit` は `scope` に応じて含まれます。
-
-`/jev-content-guard context <file>` は **Jev へ接続せず**、
-同じ内容を表示します（`<file>` 省略時は採用される設定の `context` だけ）。
-
-````
-jev-content-guard context: docs/README.md
-config: /repo/.jev-content-guard.json — 2 rule(s)
-enabled: true   includeFileName: true
-
-context: (none)
-file line: file: docs/README.md
-
-rules merged into one request: 2 — Common, Markdown
-merged context (1 part(s)):
-----
-You are a high-quality documentation expert.
-----
-
-state sent to Jev (whole file; an edit request follows `scope`):
-----
-...
-----
-````
-
-`/jev-content-guard check <file>` の結果にも `state sent to Jev:` が付きます（長い state は省略されます）。
+環境変数 `JEV_CONTENT_GUARD_DISABLE=1` を設定すると、検査を常に無効にできます。
+`on` / `off` はセッションごとに初期状態へ戻ります。
 
 ## API キーとエンドポイント
 
-`process.env` を先に見て、無ければ対象ファイルと作業ディレクトリから上位へ `.env` を探します。
-使うキーは `apiKeyEnv` → 汎用名 → エンドポイント固有名の順です。
+### 接続先
 
-| エンドポイント | 環境変数 | 既定モデル |
+接続先は次の順で決まります。
+
+1. 設定ファイルの `endpoint`
+2. 環境変数 `SYSTEMONE_ENDPOINT`
+3. API キーから自動選択（TypeSafe → OpenRouter → OpenCode Zen → Command Code。キーが無ければ TypeSafe）
+
+| 接続先 | キーの環境変数（探す順） | 既定モデル |
 |---|---|---|
-| TypeSafe（既定） | `SYSTEMONE_API_KEY`, `TYPESAFE_API_KEY` | `jev-1.13.0` |
+| TypeSafe（既定） | `SYSTEMONE_API_KEY`、`TYPESAFE_API_KEY` | `jev-1.13.0` |
 | OpenRouter | `OPENROUTER_API_KEY` | `typesafe/jev-1.13` |
-| OpenCode Zen | `OPENCODE_API_KEY`, `OPENCODE_ZEN_API_KEY` | `jev-1.13` |
+| OpenCode Zen | `OPENCODE_API_KEY`、`OPENCODE_ZEN_API_KEY` | `jev-1.13` |
 | Command Code | `COMMANDCODE_API_KEY` | `typesafe/jev` |
 
-- `SYSTEMONE_ENDPOINT` は最優先で使います。
-- 明示した `endpoint` / `SYSTEMONE_ENDPOINT` が無い場合は、キーから自動選択します（TypeSafe → OpenRouter → OpenCode Zen → Command Code）。
-- 接続先を固定するには `endpoint` / `model` / `apiKeyEnv` を設定します。
+既定モデルは接続先の URL で決まります。上の表にない URL を指定したときは `jev-1.13.0` を使います。
+
+### キーの探し方
+
+1. 設定ファイルの `apiKeyEnv` で指定した環境変数
+2. `SYSTEMONE_API_KEY`
+3. 接続先に対応するキー（上の表）
+
+環境変数を先に探し、無ければ対象ファイルのディレクトリと作業ディレクトリから親へ `.env` を探します。
+
+接続先を固定する例:
 
 ```json
 {
@@ -239,37 +229,35 @@ state sent to Jev (whole file; an edit request follows `scope`):
 }
 ```
 
-## Jev の容量制限
+## 失敗時の挙動
 
-- 1 リクエストの `state` + 最長の質問は、32k トークン程度に収める必要があります。
-- `maxFileChars` は文字数でトークン数は見ていません。日本語では 40,000 文字が超過し得ます。超過時は HTTP 400 となり、`onError` に従います（既定は編集を通す）。
+| 状況 | 挙動 |
+|---|---|
+| 検査項目が 1 つでも不合格 | 実行せず、`fail` の文面をモデルに返す |
+| Jev に接続できない、タイムアウト、応答が不正、キーが無い | `onError` に従う |
+| 設定ファイルが読めない、JSON が壊れている | 警告を表示し、その設定を無視する（検査しない） |
+| 設定ファイルが未信頼のプロジェクトにある | 警告を表示し、その設定を無視する（検査しない） |
+| 作業ディレクトリの外のファイルを編集する | 設定を適用せず、検査しない |
 
-## セキュリティ上の注意
+`onError` の値は次のとおりです。
 
-- 編集内容（ファイル全体・変更部分・その両方）と `context` は Jev のエンドポイントへ送信されます。機密情報を含むファイルではルールを絞ってください。
-- `.jev-content-guard.json` は作業ディレクトリが信頼されている場合のみ有効です。未信頼のプロジェクトでは警告を表示して無視します。
-- 探索はファイルシステム root まで行くため、信頼済みの作業ディレクトリより上にある設定も採用されます。親ディレクトリを共有する環境では注意してください。
-- 作業ディレクトリ外のファイルにはプロジェクト設定を適用しません。
-- `onError` の既定は `"allow"` です。Jev が落ちていても編集を通しますが、厳密に止めたい場合は `"block"` を設定してください。
+- `"allow"`（既定）: 警告を 1 回表示し、編集を実行する
+- `"block"`: 編集を実行せず、理由をモデルに返す
+
+## Jev に送られる内容
+
+1 回の編集につき、次の内容を Jev の接続先へ送ります。
+
+- 対象ファイルのパス（作業ディレクトリからの相対パス。`includeFileName: false` で送らない）
+- 編集後のファイル全体、または変更箇所（[検査範囲](#検査範囲scope)のとおり）
+- `context` と、該当するルールの `context`
+- 該当するルールの検査項目
+
+機密情報を含むファイルは `ignore` で検査対象から外してください。
 
 ## 制限事項
 
-- フックするのは `edit` と `write` だけです。`bash` などによるファイル変更は対象外です。
-- `scope: "file"` / `"both"` の edit は、編集ツールと同じ完全一致の置換で編集後ファイルを予測します。予測できない場合は変更部分のみをチェックします。
-- Jev の回答は確率です。`minProbability` で感度を調整してください（既定 `0.5`）。
-- `pi-jev-placement-guard` を併用すると、新規 `write` は内容（このプラグイン）と配置（placement-guard）の 2 リクエストになります。入力も context も異なるため、1 つにはまとめられません。
-
-## 開発
-
-```bash
-npm test        # node:test（モックした Jev エンドポイントで検証）
-```
-
-実際の Jev に対する簡易 E2E:
-
-```bash
-cd /tmp/jev-e2e   # .jev-content-guard.json と対象ファイルを用意
-pi -p --no-session --model <provider>/<model> \
-  --extension /path/to/pi-jev/packages/content-guard/src/index.ts \
-  "note.txt に BANANA という行を追加して"
-```
+- 検査するのは `edit` と `write` だけです。`bash` などによる変更は対象外です。
+- 判定は確率です。誤判定があるときは `minProbability` を調整してください。
+- `maxFileChars` は文字数で数えます。トークン数は見ていません。日本語を多く含むファイルでは Jev の上限を超えることがあります。超えると HTTP 400 となり、`onError` に従います。
+- [pi-jev-placement-guard](../placement-guard/README.md) を併用すると、新規ファイルの `write` は内容と配置の 2 回の Jev リクエストになります。
